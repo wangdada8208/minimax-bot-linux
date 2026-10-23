@@ -1,5 +1,7 @@
 # MiniMax Bot on Linux
 
+English | [简体中文](README.zh-CN.md)
+
 Linux host for the official MiniMax Bot. This repository contains only the host.
 The Bot page, engine, and plugin come from the upstream repository and are not
 modified or redistributed here:
