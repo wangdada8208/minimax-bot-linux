@@ -1,0 +1,14 @@
+{
+  "name": "minimax-bot-linux",
+  "private": true,
+  "type": "module",
+  "description": "Linux host for the MiniMax Bot Mini App. Serves the official page and implements context.agent with MiniMax Code ACP.",
+  "scripts": {
+    "start": "node src/host.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.22.0",
+    "yaml": "^2.9.1"
+  }
+}
