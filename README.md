@@ -1,6 +1,16 @@
 # MiniMax Bot on Linux
 
-Runs the official [MiniMax Bot](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot) Mini App without the macOS or Windows desktop app.
+Linux host for the official MiniMax Bot. This repository contains only the host.
+The Bot page, engine, and plugin come from the upstream repository and are not
+modified or redistributed here:
+
+**Upstream:** [MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps)
+
+**Upstream plugin:** [`plugins/minimax-ai/minimax-bot`](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot)
+
+The upstream repository is licensed under MIT. Its plugin and protocol remain
+upstream's. This host only starts that plugin and supplies the Agent interface
+that the desktop app normally supplies.
 
 The desktop app normally does three things this program replaces:
 
