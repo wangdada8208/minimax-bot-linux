@@ -10,11 +10,15 @@
  * loaded as-is and is not modified.
  *
  * The plugin binds the address we pass and never returns the server object, so
- * the guard accepts the connection, checks the token, then replays the same
- * bytes to the plugin on loopback. A request with no token never reaches it.
+ * the guard accepts the request, checks the token, then proxies it to the
+ * plugin on loopback. A request with no token never reaches it.
+ *
+ * The guard is a real HTTP proxy with keep-alive: the page loads ~20 ES modules,
+ * and one connection per module would add a round trip each — unusable over a
+ * relayed link. Streaming responses (the event stream) pass through untouched.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createConnection, createServer } from 'node:net';
+import { Agent, createServer, request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -82,70 +86,59 @@ const lifecycle = await plugin.start({
   agent,
 });
 
-const guard = createServer((socket) => {
-  let buffer = Buffer.alloc(0);
-  let decided = false;
-  const fail = (status, text) => {
-    socket.end(
-      `HTTP/1.1 ${status} ${text}\r\ncontent-type: text/plain; charset=utf-8\r\ncache-control: no-store\r\ncontent-length: ${Buffer.byteLength(text)}\r\nconnection: close\r\n\r\n${text}`,
-    );
-  };
-  const onData = (chunk) => {
-    if (decided) return;
-    buffer = Buffer.concat([buffer, chunk]);
-    const headerEnd = buffer.indexOf('\r\n\r\n');
-    if (headerEnd === -1) {
-      if (buffer.length > 64 * 1024) fail(431, 'Request header too large.');
-      return;
-    }
-    decided = true;
-    socket.off('data', onData);
-    const header = Object.create(null);
-    for (const line of buffer.subarray(0, headerEnd).toString('latin1').split('\r\n').slice(1)) {
-      const split = line.indexOf(':');
-      if (split === -1) continue;
-      header[line.slice(0, split).trim().toLowerCase()] = line.slice(split + 1).trim();
-    }
-    const requestLine = buffer.subarray(0, buffer.indexOf('\r\n')).toString('latin1');
-    const target = requestLine.split(' ')[1] ?? '/';
-    let url;
-    try {
-      url = new URL(target, 'http://bot.local');
-    } catch {
-      fail(400, 'Bad request.');
-      return;
-    }
-    const request = { headers: { authorization: header.authorization, cookie: header.cookie } };
-    const mobilePublic = url.pathname === '/api/mobile/v1/info' || url.pathname === '/api/mobile/v1/auth/refresh';
-    if (!mobilePublic && !tokenMatches(token, presentedToken(request, url))) {
-      fail(401, 'Sign in with the access token printed when the host started.');
-      return;
-    }
-    const upstreamPort = url.pathname.startsWith('/api/mobile/') ? mobile.port : appPort;
-    const upstream = createConnection({ host: '127.0.0.1', port: upstreamPort }, () => {
-      if (url.searchParams.has('token')) {
-        url.searchParams.delete('token');
-        const next = `${url.pathname}${url.search}` || '/';
-        socket.end(
-          'HTTP/1.1 302 Found\r\n'
-          + `location: ${next}\r\n`
-          + `set-cookie: minimax_bot=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000\r\n`
-          + 'cache-control: no-store\r\ncontent-length: 0\r\nconnection: close\r\n\r\n',
-        );
-        upstream.end();
-        return;
-      }
-      const forwarded = Buffer.from(buffer.toString('latin1').replace(/\r\nconnection:[^\r\n]*/i, '').replace('\r\n\r\n', '\r\nconnection: close\r\n\r\n'), 'latin1');
-      upstream.write(forwarded);
-      socket.pipe(upstream);
-      upstream.pipe(socket);
-      socket.on('end', () => upstream.end());
+// One pooled agent per upstream so the browser's keep-alive connection is
+// reused for every module, stylesheet and API call.
+const appAgent = new Agent({ keepAlive: true, maxSockets: 64 });
+const mobileAgent = new Agent({ keepAlive: true, maxSockets: 16 });
+
+const guard = createServer((request, response) => {
+  const url = new URL(request.url ?? '/', 'http://bot.local');
+  const mobilePublic = url.pathname === '/api/mobile/v1/info' || url.pathname === '/api/mobile/v1/auth/refresh';
+  if (!mobilePublic && !tokenMatches(token, presentedToken(request, url))) {
+    response.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    response.end('Sign in with the access token printed when the host started.');
+    return;
+  }
+  if (url.searchParams.has('token')) {
+    url.searchParams.delete('token');
+    const next = `${url.pathname}${url.search}` || '/';
+    response.writeHead(302, {
+      location: next,
+      'set-cookie': `minimax_bot=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000`,
+      'cache-control': 'no-store',
+      'content-length': '0',
     });
-    upstream.on('error', () => fail(502, 'MiniMax Bot is not reachable.'));
-  };
-  socket.on('data', onData);
-  socket.on('error', () => socket.destroy());
+    response.end();
+    return;
+  }
+  const mobilePath = url.pathname.startsWith('/api/mobile/');
+  const upstream = httpRequest(
+    {
+      host: '127.0.0.1',
+      port: mobilePath ? mobile.port : appPort,
+      method: request.method,
+      path: request.url,
+      headers: { ...request.headers, host: `127.0.0.1:${mobilePath ? mobile.port : appPort}` },
+      agent: mobilePath ? mobileAgent : appAgent,
+    },
+    (reply) => {
+      response.writeHead(reply.statusCode ?? 502, reply.headers);
+      reply.pipe(response);
+    },
+  );
+  upstream.on('error', () => {
+    if (!response.headersSent) {
+      response.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('MiniMax Bot is not reachable.');
+    } else {
+      response.destroy();
+    }
+  });
+  request.pipe(upstream);
 });
+// The event stream stays open, so the guard must not time it out.
+guard.requestTimeout = 0;
+guard.headersTimeout = 60_000;
 
 await new Promise((resolve) => guard.listen(options.port, options.host, resolve));
 const address = guard.address();
@@ -161,6 +154,8 @@ const stop = async () => {
   stopping = true;
   abort.abort();
   mobile.close();
+  appAgent.destroy();
+  mobileAgent.destroy();
   await acp.dispose();
   await lifecycle?.dispose?.();
   guard.close();
