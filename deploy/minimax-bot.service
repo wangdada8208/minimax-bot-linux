@@ -1,0 +1,19 @@
+[Unit]
+Description=MiniMax Bot on Linux (official MiniMax Bot Mini App host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust these two paths to your checkout and CLI location.
+WorkingDirectory=/opt/minimax-bot-linux
+EnvironmentFile=/etc/minimax-bot.env
+ExecStart=/usr/bin/node /opt/minimax-bot-linux/src/host.mjs
+Restart=always
+RestartSec=3
+# The host starts mcode acp as a child; give it room to shut down cleanly.
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

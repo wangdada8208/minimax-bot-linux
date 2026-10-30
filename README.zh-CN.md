@@ -66,6 +66,19 @@ MINIMAX_BOT_PLUGIN=/path/to/MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot
 
 请把 `MINIMAX_BOT_HOST` 绑定到 `127.0.0.1`，再通过带登录的反向代理访问。每一轮都可以使用 `MINIMAX_BOT_CWD` 里的文件和 shell，所以不要把端口直接公开到网络。
 
+## 让它常驻
+
+宿主就是一个普通的长驻进程。放在服务器上时，建议注册成系统服务，崩溃或重启后会自动拉起：
+
+```sh
+sudo cp deploy/minimax-bot.service /etc/systemd/system/
+sudo cp deploy/minimax-bot.env.example /etc/minimax-bot.env   # 然后改成你的路径
+sudo systemctl daemon-reload
+sudo systemctl enable --now minimax-bot
+```
+
+没有 systemd 时，运行 `scripts/watchdog.sh --daemon`，进程退出后会自动重启。
+
 ## 与桌面端的差别
 
 - ACP 不返回桌面端的问卷对象。模型提出的问题会以文本回到对话，而不是页面内的表单。

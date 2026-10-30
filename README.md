@@ -70,6 +70,19 @@ The first message starts `mcode acp`. Until `mcode login` has been completed, th
 
 Bind `MINIMAX_BOT_HOST` to `127.0.0.1` and reach it through an authenticated reverse proxy. Each turn can use files and a shell inside `MINIMAX_BOT_CWD`, so do not publish the port directly.
 
+## Keep it running
+
+The host is a normal long-running process. On a server, run it as a service so it restarts after a crash or reboot:
+
+```sh
+sudo cp deploy/minimax-bot.service /etc/systemd/system/
+sudo cp deploy/minimax-bot.env.example /etc/minimax-bot.env   # then edit the paths
+sudo systemctl daemon-reload
+sudo systemctl enable --now minimax-bot
+```
+
+Without systemd, `scripts/watchdog.sh --daemon` restarts the host whenever it exits.
+
 ## What is different from the desktop app
 
 - ACP does not return the desktop questionnaire object. A question from the model arrives as text instead of the in-page form.
