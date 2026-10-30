@@ -1,0 +1,24 @@
+services:
+  minimax-bot:
+    build: .
+    image: minimax-bot-linux:latest
+    container_name: minimax-bot
+    restart: unless-stopped
+    ports:
+      # Bind to loopback and put an authenticated reverse proxy in front.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # Bot state, messages, memory and the workspace the Bots may edit.
+      - ./data:/data
+      # MiniMax Code CLI login and model configuration. Keep this private.
+      - ./minimax-home:/root/.minimax
+    environment:
+      MINIMAX_BOT_HOST: 0.0.0.0
+      MINIMAX_BOT_PORT: 8787
+      MINIMAX_BOT_DATA: /data
+      MINIMAX_BOT_CWD: /data/workspace
+      MINIMAX_BOT_PLUGIN: /opt/upstream/plugins/minimax-ai/minimax-bot
+      MINIMAX_BOT_MCODE: /usr/local/bin/mcode
+      # Optional model catalog for the Bot settings picker.
+      # MINIMAX_BOT_MODELS_URL: http://host.docker.internal:3425/v1/models
+      # MINIMAX_BOT_MODELS_API_KEY: ""

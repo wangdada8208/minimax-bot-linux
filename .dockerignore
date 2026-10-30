@@ -1,0 +1,7 @@
+node_modules
+data
+minimax-home
+.git
+.github
+*.log
+.env

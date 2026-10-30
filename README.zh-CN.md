@@ -18,35 +18,37 @@
 
 这里的 `context.agent` 是一个 `mcode acp` 进程。每个 Bot 对话是一个 ACP 会话。MiniMax Code 要求的工具批准会显示在 Bot 页面上，选择**允许一次**或**拒绝**就会回答该请求。页面、群聊、记忆、定时任务和 MCP 工具都是未修改的上游插件。
 
-## 在自己的服务器上安装
+## 环境要求
 
-需要 Node.js 22.19 或更新版本，系统可以是 Linux、macOS 或 Windows。官方 MiniMax Bot 插件不包含在本仓库中，请从上游仓库克隆到它旁边：
+- Linux（x86_64 或 arm64），VPS 或家里的服务器都可以
+- Node.js 22.19 或更新版本
+- 一个 MiniMax 账号。Bot 通过 MiniMax Code CLI 运行，用的是你自己的账号，需要执行一次 `mcode login`。
+
+## 用 Docker 快速部署
 
 ```sh
 git clone https://github.com/wangdada8208/minimax-bot-linux.git
-git clone --depth 1 https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git
-npm install -g @minimax-ai/code
+cd minimax-bot-linux
+
+docker compose build
+docker compose run --rm minimax-bot mcode login --no-browser   # 中国大陆账号加 --region cn
+docker compose up -d
+docker compose logs -f        # 打印带访问令牌的页面地址
+```
+
+数据在 `./data`，CLI 登录信息在 `./minimax-home`。compose 只绑定 `127.0.0.1:8787`，对外访问前请自己加一层带登录的 HTTPS 反向代理。
+
+## 不用 Docker 快速部署
+
+```sh
+git clone https://github.com/wangdada8208/minimax-bot-linux.git
+cd minimax-bot-linux
+./scripts/install.sh          # 安装依赖、mcode CLI 和锁定版本的上游插件
 mcode login --region global --no-browser
-cd minimax-bot-linux && npm install
 MINIMAX_BOT_PLUGIN="$PWD/../MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot" npm start
 ```
 
 中国大陆账号把 `--region global` 换成 `--region cn`。如果要使用自己的 OpenAI 兼容模型目录，设置 `MINIMAX_BOT_MODELS_URL` 和 `MINIMAX_BOT_MODELS_API_KEY`。密钥只从环境变量读取，本仓库不会写入密钥。
-
-## 运行
-
-必须先安装并登录 MiniMax Code CLI。登录会打开浏览器，所以不能替你完成：
-
-```sh
-mcode login --region global --no-browser
-```
-
-中国大陆账号使用 `--region cn`。然后执行：
-
-```sh
-npm install
-MINIMAX_BOT_PLUGIN=/path/to/MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot npm start
-```
 
 进程会打印类似 `http://127.0.0.1:8787/bot?token=...` 的地址。打开后会写入 HttpOnly cookie 并跳转到 `/bot`。令牌保存在 `~/.minimax-bot/access-token`。没有令牌的请求返回 `401`。
 
@@ -79,6 +81,16 @@ sudo systemctl enable --now minimax-bot
 
 没有 systemd 时，运行 `scripts/watchdog.sh --daemon`，进程退出后会自动重启。
 
+## 跟踪上游
+
+本宿主锁定在一个上游提交上，记录在 [`upstream.lock.json`](upstream.lock.json)（目前是 MiniMax Bot **0.7.15**）。Docker 镜像和安装脚本都会检出这个确切的提交，所以部署结果可复现。
+
+```sh
+npm run update-upstream      # 把锁定版本推进到上游 main 最新
+```
+
+每周一次的 GitHub Action 会对比锁定版本和上游；上游出新版本时自动开一个带 `upstream` 标签的 issue。详见 [UPSTREAM.md](UPSTREAM.md)。
+
 ## 与桌面端的差别
 
 - ACP 不返回桌面端的问卷对象。模型提出的问题会以文本回到对话，而不是页面内的表单。
@@ -89,7 +101,7 @@ sudo systemctl enable --now minimax-bot
 ## 测试
 
 ```sh
-node --test test/*.test.mjs
+npm test
 ```
 
 测试使用假的 ACP 进程，不会调用 MiniMax。

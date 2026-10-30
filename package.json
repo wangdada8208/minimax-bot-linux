@@ -1,11 +1,33 @@
 {
   "name": "minimax-bot-linux",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
-  "description": "Linux host for the MiniMax Bot Mini App. Serves the official page and implements context.agent with MiniMax Code ACP.",
+  "description": "Run the official MiniMax Bot Mini App on a Linux server and reach its page from another computer.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangdada8208/minimax-bot-linux.git"
+  },
+  "homepage": "https://github.com/wangdada8208/minimax-bot-linux#readme",
+  "bugs": {
+    "url": "https://github.com/wangdada8208/minimax-bot-linux/issues"
+  },
+  "keywords": [
+    "minimax",
+    "minimax-bot",
+    "miniapp",
+    "linux",
+    "self-hosted",
+    "acp"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "start": "node src/host.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "update-upstream": "bash scripts/update-upstream.sh"
   },
   "dependencies": {
     "ws": "^8.22.0",

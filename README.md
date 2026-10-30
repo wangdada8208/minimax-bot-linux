@@ -22,39 +22,51 @@ The desktop app normally does three things this program replaces:
 
 Here `context.agent` is one `mcode acp` process. Each Bot conversation is an ACP session. Tool approvals asked by MiniMax Code appear on the Bot page, and choosing **Allow once** or **Deny** answers that ACP permission request. The page, group chats, memory, schedules, and the MCP tools are the official plugin, unchanged.
 
-## Install on your own server
+## Requirements
 
-Requires Node.js 22.19 or newer and a Linux, macOS, or Windows machine. The official MiniMax Bot plugin is not included; clone it beside this repository:
+- Linux (x86_64 or arm64), a VPS or home server is fine
+- Node.js 22.19 or newer
+- A MiniMax account. The Bots run through the MiniMax Code CLI, which signs in
+  with your own account; you need to run `mcode login` once.
+
+## Quick start with Docker
 
 ```sh
 git clone https://github.com/wangdada8208/minimax-bot-linux.git
-git clone --depth 1 https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git
-npm install -g @minimax-ai/code
+cd minimax-bot-linux
+
+docker compose build
+docker compose run --rm minimax-bot mcode login --no-browser   # use --region cn for mainland China
+docker compose up -d
+docker compose logs -f        # prints the page URL with its access token
+```
+
+State is in `./data`, the CLI login is in `./minimax-home`. The compose file
+binds `127.0.0.1:8787`, so put your own HTTPS reverse proxy with a login in
+front before exposing it.
+
+## Quick start without Docker
+
+```sh
+git clone https://github.com/wangdada8208/minimax-bot-linux.git
+cd minimax-bot-linux
+./scripts/install.sh          # installs deps, the mcode CLI, and the pinned plugin
 mcode login --region global --no-browser
-cd minimax-bot-linux && npm install
 MINIMAX_BOT_PLUGIN="$PWD/../MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot" npm start
 ```
 
-Use `--region cn` for a mainland China account. A custom OpenAI-compatible model catalog can be supplied with `MINIMAX_BOT_MODELS_URL` and `MINIMAX_BOT_MODELS_API_KEY`; the key is read from the environment and is never written by this repository.
+Use `--region cn` for a mainland China account. A custom OpenAI-compatible
+model catalog can be supplied with `MINIMAX_BOT_MODELS_URL` and
+`MINIMAX_BOT_MODELS_API_KEY`; the key is read from the environment and is never
+written by this repository.
 
-## Run
+The process prints a URL such as `http://127.0.0.1:8787/bot?token=...`. Opening
+it sets an HttpOnly cookie and redirects to `/bot`. The token is remembered in
+`~/.minimax-bot/access-token`. Requests without it get `401`.
 
-MiniMax Code CLI has to be installed and signed in first. Signing in opens a browser, so it cannot be done for you:
-
-```sh
-mcode login --region global --no-browser
-```
-
-Use `--region cn` for a mainland China account. Then:
-
-```sh
-npm install
-MINIMAX_BOT_PLUGIN=/path/to/MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot npm start
-```
-
-The process prints a URL such as `http://127.0.0.1:8787/bot?token=...`. Opening it sets an HttpOnly cookie and redirects to `/bot`. The token is remembered in `~/.minimax-bot/access-token`. Requests without it get `401`.
-
-The first message starts `mcode acp`. Until `mcode login` has been completed, that process has no model and the reply fails; the page itself still loads, and Bots, groups, and memory can be created.
+The first message starts `mcode acp`. Until `mcode login` has been completed,
+that process has no model and the reply fails; the page itself still loads, and
+Bots, groups, and memory can be created.
 
 ## Configuration
 
@@ -83,6 +95,20 @@ sudo systemctl enable --now minimax-bot
 
 Without systemd, `scripts/watchdog.sh --daemon` restarts the host whenever it exits.
 
+## Upstream tracking
+
+This host is pinned to one upstream commit, recorded in
+[`upstream.lock.json`](upstream.lock.json) (currently MiniMax Bot **0.7.15**).
+The Docker image and the installer both check out that exact commit, so a
+deployment is reproducible.
+
+```sh
+npm run update-upstream      # move the pin to the latest upstream main
+```
+
+A weekly GitHub Action compares the pin with upstream and opens an `upstream`
+issue when a newer Bot version is released. See [UPSTREAM.md](UPSTREAM.md).
+
 ## What is different from the desktop app
 
 - ACP does not return the desktop questionnaire object. A question from the model arrives as text instead of the in-page form.
@@ -93,7 +119,7 @@ Without systemd, `scripts/watchdog.sh --daemon` restarts the host whenever it ex
 ## Tests
 
 ```sh
-node --test minimax-bot-linux/test/*.test.mjs
+npm test
 ```
 
 The tests use a fake ACP process. They do not call MiniMax.
