@@ -22,6 +22,7 @@ import { Agent, createServer, request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createGzip } from 'node:zlib';
 import { AcpAgent } from './agent.mjs';
 import { startMobileBridge } from './mobile-bridge.mjs';
 import { newToken, presentedToken, tokenMatches } from './token.mjs';
@@ -122,6 +123,25 @@ const guard = createServer((request, response) => {
       agent: mobilePath ? mobileAgent : appAgent,
     },
     (reply) => {
+      // A page load is a few hundred KB of JSON and ES modules. Compressing here
+      // matters most on a relayed link, where the plugin's uncompressed replies
+      // are what make a chat feel slow to open.
+      const type = String(reply.headers['content-type'] ?? '');
+      const streaming = type.startsWith('text/event-stream');
+      const compressible = /^(?:text\/|application\/(?:json|javascript)|image\/svg)/.test(type);
+      const wantsGzip = /\bgzip\b/.test(String(request.headers['accept-encoding'] ?? ''));
+      if (wantsGzip && compressible && !streaming && reply.statusCode === 200 && !reply.headers['content-encoding']) {
+        const headers = { ...reply.headers };
+        delete headers['content-length'];
+        headers['content-encoding'] = 'gzip';
+        headers.vary = 'Accept-Encoding';
+        response.writeHead(reply.statusCode, headers);
+        const gzip = createGzip({ level: 6 });
+        gzip.on('error', () => response.destroy());
+        reply.on('error', () => gzip.destroy());
+        reply.pipe(gzip).pipe(response);
+        return;
+      }
       response.writeHead(reply.statusCode ?? 502, reply.headers);
       reply.pipe(response);
     },
