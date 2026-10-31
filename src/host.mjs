@@ -130,8 +130,14 @@ const guard = createServer((request, response) => {
       const streaming = type.startsWith('text/event-stream');
       const compressible = /^(?:text\/|application\/(?:json|javascript)|image\/svg)/.test(type);
       const wantsGzip = /\bgzip\b/.test(String(request.headers['accept-encoding'] ?? ''));
-      if (wantsGzip && compressible && !streaming && reply.statusCode === 200 && !reply.headers['content-encoding']) {
-        const headers = { ...reply.headers };
+      const headers = { ...reply.headers };
+      // The plugin marks every static file no-store, so a refresh re-downloads
+      // all of the page's modules. Let the browser keep them for a few minutes;
+      // a plugin update still shows up on the next reload after that.
+      if (request.method === 'GET' && reply.statusCode === 200 && /^\/bot\/[^?]*\.(?:js|css|svg|png)$/.test(url.pathname)) {
+        headers['cache-control'] = 'public, max-age=300';
+      }
+      if (wantsGzip && compressible && !streaming && reply.statusCode === 200 && !headers['content-encoding']) {
         delete headers['content-length'];
         headers['content-encoding'] = 'gzip';
         headers.vary = 'Accept-Encoding';
@@ -142,7 +148,7 @@ const guard = createServer((request, response) => {
         reply.pipe(gzip).pipe(response);
         return;
       }
-      response.writeHead(reply.statusCode ?? 502, reply.headers);
+      response.writeHead(reply.statusCode ?? 502, headers);
       reply.pipe(response);
     },
   );
@@ -158,7 +164,11 @@ const guard = createServer((request, response) => {
 });
 // The event stream stays open, so the guard must not time it out.
 guard.requestTimeout = 0;
-guard.headersTimeout = 60_000;
+// Browsers reuse an idle socket for a long time. Node closes one after
+// keepAliveTimeout (5 s by default), and a request sent into a socket the
+// server is closing costs an extra round trip — noticeable on a relayed link.
+guard.keepAliveTimeout = 65_000;
+guard.headersTimeout = 66_000;
 
 await new Promise((resolve) => guard.listen(options.port, options.host, resolve));
 const address = guard.address();
