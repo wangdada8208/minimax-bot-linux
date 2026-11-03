@@ -142,3 +142,5 @@ The policy lives in `scripts/self-update.sh`, which can also be run by hand:
 bash scripts/self-update.sh check
 bash scripts/self-update.sh apply
 ```
+
+<!-- update flow verified -->
