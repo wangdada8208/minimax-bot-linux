@@ -159,6 +159,29 @@
         status.textContent = text('已是最新版本。', 'Already up to date.');
       }
 
+      // After an update the host restarts itself. The connection drops for a
+      // few seconds, so wait for it to answer again and then reload the page.
+      function waitForRestart() {
+        status.className = 'host-update-status warn';
+        status.textContent = text('更新已完成，正在重启…', 'Update applied, restarting…');
+        var tries = 0;
+        var timer = setInterval(function () {
+          tries += 1;
+          fetchJson('/api/update').then(function (info) {
+            if (info && info.ok && !info.restartRequired) {
+              clearInterval(timer);
+              status.className = 'host-update-status ok';
+              status.textContent = text('已更新到最新版本，正在刷新…', 'Updated. Reloading…');
+              setTimeout(function () { location.reload(); }, 800);
+            } else if (tries > 90) {
+              clearInterval(timer);
+              status.className = 'host-update-status warn';
+              status.textContent = text('重启耗时较长，请稍后手动刷新页面。', 'Restart is taking a while; reload the page later.');
+            }
+          });
+        }, 2000);
+      }
+
       applyBtn.addEventListener('click', function () {
         applyBtn.disabled = true;
         status.className = 'host-update-status';
@@ -175,6 +198,7 @@
             restartRequired: result.restartRequired,
           });
           if (typeof onRetry === 'function') onRetry();
+          if (result.restartRequired) waitForRestart();
         });
       });
 

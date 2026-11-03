@@ -145,6 +145,13 @@ const guard = createServer((request, response) => {
       .then((result) => {
         response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         response.end(JSON.stringify(result));
+        // The new code is on disk; the running process still has the old one.
+        // Exit so the watchdog brings it back with the update, after the reply
+        // has had time to reach the page.
+        if (isApply && result.ok && result.restartRequired) {
+          console.error('[bot] self_update.restarting');
+          setTimeout(() => void stop().then(() => process.exit(0)), 1500).unref();
+        }
       })
       .catch((error) => {
         response.writeHead(500, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
