@@ -93,12 +93,12 @@ const lifecycle = await startMiniAppModule({
   agent,
 });
 const pluginPort = lifecycle.port;
-// It proxies to the plugin on pluginPort, so it keeps a separate listener.
+// The phone bridge talks HTTP to the plugin and keeps its own listener.
+const mobile = await startMobileBridge({ host: '127.0.0.1', port: mobilePort, token });
 const selfUpdate = new SelfUpdate({
   root,
   logger: { warn: (message) => console.error(`[bot] warn ${message}`) },
 });
-// It proxies to the plugin on pluginPort({ host: '127.0.0.1', port: mobilePort, token });
 
 // One pooled agent per upstream so the browser's keep-alive connection is
 // reused for every module, stylesheet and API call.
@@ -191,8 +191,11 @@ const guard = createServer((request, response) => {
             : original + tag;
           const body = Buffer.from(injected, 'utf8');
           const headers = { ...reply.headers };
+          // We send a fixed-length body, so drop both the plugin's framing hints:
+          // Content-Length together with Transfer-Encoding is a protocol error.
           delete headers['content-length'];
           delete headers['content-encoding'];
+          delete headers['transfer-encoding'];
           headers['content-length'] = body.length;
           headers['cache-control'] = 'no-store';
           response.writeHead(reply.statusCode, headers);
