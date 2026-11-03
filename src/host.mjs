@@ -125,12 +125,12 @@ const guard = createServer((request, response) => {
     response.end();
     return;
   }
-  // The update page is served by this host, not by the plugin, so the plugin
-  // stays a byte-for-byte upstream copy.
-  if (url.pathname === '/update') {
-    const page = readFileSync(join(here, 'update-page.html'));
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': page.length });
-    response.end(page);
+  // The update control is served by this host and injected into the Bot page,
+  // so the plugin stays a byte-for-byte upstream copy.
+  if (url.pathname === '/host-update.js') {
+    const script = readFileSync(join(here, 'host-update.js'));
+    response.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-store', 'content-length': script.length });
+    response.end(script);
     return;
   }
   // The update button talks to the checkout this process runs from.
@@ -168,6 +168,32 @@ const guard = createServer((request, response) => {
       // are what make a chat feel slow to open.
       const type = String(reply.headers['content-type'] ?? '');
       const streaming = type.startsWith('text/event-stream');
+      // Put the update control into the Bot page itself. Buffering this one
+      // small HTML reply lets the host add a script tag without touching the
+      // plugin's files; everything else still streams through untouched.
+      const botPage = request.method === 'GET' && reply.statusCode === 200 &&
+        /^text\/html/.test(type) && /^\/bot(?:\/|$)/.test(url.pathname);
+      if (botPage) {
+        const chunks = [];
+        reply.on('data', (chunk) => chunks.push(chunk));
+        reply.on('end', () => {
+          const original = Buffer.concat(chunks).toString('utf8');
+          const tag = '<script defer src="/host-update.js"></script>';
+          const injected = original.includes('</body>')
+            ? original.replace('</body>', `${tag}\n</body>`)
+            : original + tag;
+          const body = Buffer.from(injected, 'utf8');
+          const headers = { ...reply.headers };
+          delete headers['content-length'];
+          delete headers['content-encoding'];
+          headers['content-length'] = body.length;
+          headers['cache-control'] = 'no-store';
+          response.writeHead(reply.statusCode, headers);
+          response.end(body);
+        });
+        reply.on('error', () => { if (!response.headersSent) response.writeHead(502); response.end(); });
+        return;
+      }
       const compressible = /^(?:text\/|application\/(?:json|javascript)|image\/svg)/.test(type);
       const wantsGzip = /\bgzip\b/.test(String(request.headers['accept-encoding'] ?? ''));
       const headers = { ...reply.headers };
