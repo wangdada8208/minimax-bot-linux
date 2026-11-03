@@ -123,3 +123,22 @@ npm test
 ```
 
 The tests use a fake ACP process. They do not call MiniMax.
+
+## Updating from the web
+
+Open `/update` on the same host (behind the same access token). The page shows
+the running commit, the latest commit, and whether updating is safe.
+
+- **Check** only runs `git fetch`; it never changes the checkout.
+- **Update** fast-forwards the checkout, reinstalls dependencies if the lockfile
+  moved, and refuses with a visible reason if anything would conflict: local
+  edits, a diverged branch, a detached HEAD, or local commits not on the remote.
+- An update lands on disk. The page then says a restart is required; the
+  watchdog restarts the host within about 30 seconds after it exits.
+
+The policy lives in `scripts/self-update.sh`, which can also be run by hand:
+
+```sh
+bash scripts/self-update.sh check
+bash scripts/self-update.sh apply
+```
