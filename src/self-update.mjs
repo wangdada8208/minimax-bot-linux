@@ -10,7 +10,7 @@
  * Nothing here touches the running process: an update lands on disk and the
  * page tells the operator to restart, so the swap never happens under a live turn.
  */
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 /** How long a check or an apply may take before it is reported as unavailable. */
@@ -23,6 +23,10 @@ export class SelfUpdate {
     this.root = options.root;
     this.logger = options.logger ?? console;
     this.script = path.join(this.root, 'scripts/self-update.sh');
+    // The commit this process actually booted with. The checkout can move ahead
+    // while the process keeps running the old code, so the page must compare
+    // against this, not the current HEAD on disk.
+    this.launchedCommit = readHead(this.root);
     /** @type {{ from: string, to: string } | undefined} */
     this.pending = undefined;
     /** @type {Promise<any> | undefined} */
@@ -56,10 +60,16 @@ export class SelfUpdate {
     });
   }
 
-  /** Current commit, whether an update exists, and whether applying is safe. */
+  /**
+   * The running commit, whether an update exists, and whether applying is safe.
+   * A checkout that already moved ahead of the running process still needs a
+   * restart, so that is reported even when nothing new is left to fetch.
+   */
   async check() {
     const result = await this.#run('check');
-    return { ...result, restartRequired: Boolean(this.pending) };
+    const disk = result.current ?? readHead(this.root);
+    const restartRequired = Boolean(this.pending) || (Boolean(disk) && disk !== this.launchedCommit);
+    return { ...result, running: this.launchedCommit, disk, restartRequired };
   }
 
   /**
@@ -74,7 +84,9 @@ export class SelfUpdate {
         if (result.ok && result.changed) {
           this.pending = { from: String(result.from ?? ''), to: String(result.to ?? '') };
         }
-        return { ...result, restartRequired: Boolean(this.pending) };
+        const disk = result.to ?? result.current ?? readHead(this.root);
+        const restartRequired = Boolean(this.pending) || (Boolean(disk) && disk !== this.launchedCommit);
+        return { ...result, running: this.launchedCommit, disk, restartRequired };
       } finally {
         this.inFlight = undefined;
       }
@@ -85,5 +97,14 @@ export class SelfUpdate {
   /** True once an update has landed on disk but the process still runs the old code. */
   get restartRequired() {
     return Boolean(this.pending);
+  }
+}
+
+/** The checkout's HEAD, or '' when it cannot be read. */
+function readHead(root) {
+  try {
+    return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  } catch {
+    return '';
   }
 }

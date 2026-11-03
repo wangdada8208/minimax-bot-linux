@@ -39,8 +39,9 @@
   <p class="sub">检查并应用本机这份代码的更新。更新只落在磁盘上，重启后才生效。</p>
 
   <div class="card">
-    <div class="row"><span class="label">当前版本</span><code id="current">读取中…</code></div>
-    <div class="row"><span class="label">最新版本</span><code id="remote">—</code></div>
+    <div class="row"><span class="label">正在运行</span><code id="running">读取中…</code></div>
+    <div class="row"><span class="label">磁盘上</span><code id="disk">—</code></div>
+    <div class="row"><span class="label">远端最新</span><code id="remote">—</code></div>
     <div class="row"><span class="label">状态</span><span class="status" id="status"><span class="dot"></span><span id="statusText">正在检查…</span></span></div>
   </div>
 
@@ -58,7 +59,8 @@
 
 <script>
 (function () {
-  var current = document.getElementById('current');
+  var running = document.getElementById('running');
+  var disk = document.getElementById('disk');
   var remote = document.getElementById('remote');
   var statusDot = document.querySelector('#status .dot');
   var statusText = document.getElementById('statusText');
@@ -79,7 +81,8 @@
   function setStatus(kind, text) { statusDot.className = 'dot ' + kind; statusText.textContent = text; }
 
   function render(info) {
-    current.textContent = short(info.current);
+    running.textContent = short(info.running || info.current);
+    disk.textContent = short(info.disk || info.current);
     remote.textContent = short(info.remote);
     hideNotice();
     commits.classList.add('hidden');
@@ -93,8 +96,8 @@
       return;
     }
     if (info.restartRequired) {
-      setStatus('warn', '已更新，等待重启');
-      showNotice('warn', '更新已写入磁盘。重启宿主后生效。');
+      setStatus('warn', '需要重启');
+      showNotice('warn', '磁盘上的代码比正在运行的进程新。重启宿主后才会用上新代码。');
       restartBtn.classList.remove('hidden');
       return;
     }
@@ -140,7 +143,7 @@
       .then(function (r) { return r.json(); })
       .then(function (result) {
         if (!result.ok) { render({ ok: false, reason: result.reason }); return; }
-        render({ ok: true, current: result.to || result.current, remote: result.to || result.current, updateAvailable: false, canUpdate: true, restartRequired: result.restartRequired, behind: 0 });
+        render({ ok: true, running: result.running, disk: result.disk || result.to, remote: result.to || result.disk, updateAvailable: false, canUpdate: true, restartRequired: result.restartRequired, behind: 0 });
       })
       .catch(function (e) { setStatus('bad', '更新失败'); showNotice('blocked', String(e)); });
   });
