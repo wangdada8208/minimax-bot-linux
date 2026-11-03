@@ -126,6 +126,9 @@ The tests use a fake ACP process. They do not call MiniMax.
 
 ## Updating from the web
 
+The page lives at `/update` on the same host, behind the same access token —
+for example `https://<your-domain>/update`.
+
 Open `/update` on the same host (behind the same access token). The page shows
 the running commit, the latest commit, and whether updating is safe.
 
@@ -142,5 +145,3 @@ The policy lives in `scripts/self-update.sh`, which can also be run by hand:
 bash scripts/self-update.sh check
 bash scripts/self-update.sh apply
 ```
-
-<!-- update flow verified -->
