@@ -98,7 +98,7 @@ Without systemd, `scripts/watchdog.sh --daemon` restarts the host whenever it ex
 ## Upstream tracking
 
 This host is pinned to one upstream commit, recorded in
-[`upstream.lock.json`](upstream.lock.json) (currently MiniMax Bot **0.7.15**).
+[`upstream.lock.json`](upstream.lock.json) (currently MiniMax Bot **0.7.18**).
 The Docker image and the installer both check out that exact commit, so a
 deployment is reproducible.
 

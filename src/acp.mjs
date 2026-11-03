@@ -1,12 +1,15 @@
 // @ts-check
 /**
- * A minimal JSON-RPC client for one Agent Client Protocol process.
+ * ACP client built on the official SDK.
  *
- * ACP speaks newline-delimited JSON-RPC on stdio. Requests we send wait for a
- * matching response. Requests the agent sends back (permission prompts) are
- * dispatched to `onRequest` and answered with `respond`. Notifications such as
- * `session/update` go to `onNotification`.
+ * Upstream `minimax-code` speaks ACP through `@agentclientprotocol/sdk`
+ * (packages/tui/src/acp/stdio.ts), so this host uses the same library instead
+ * of a hand-written JSON-RPC loop. The public surface stays the small one the
+ * rest of the host already uses: `request`, `notify`, and the two handlers for
+ * notifications and agent-initiated requests.
  */
+import { Readable, Writable } from 'node:stream';
+import * as acp from '@agentclientprotocol/sdk';
 
 export class AcpError extends Error {
   /** @param {string} message @param {number} [code] */
@@ -17,95 +20,72 @@ export class AcpError extends Error {
   }
 }
 
+/** Custom methods mcode adds on top of ACP. */
+export const EXTENSIONS = Object.freeze({
+  steer: 'mcode/session/steer',
+  queueEnqueue: 'mcode/session/queue/enqueue',
+  queueList: 'mcode/session/queue/list',
+});
+
 export class AcpClient {
   /**
-   * @param {{ write: (line: string) => void, onNotification?: (method: string, params: any) => void, onRequest?: (method: string, params: any) => Promise<unknown> }}
-   *   handlers
+   * @param {{
+   *   input: Readable,
+   *   output: Writable,
+   *   onNotification?: (method: string, params: any) => void,
+   *   onRequest?: (method: string, params: any) => Promise<unknown>,
+   *   clientInfo?: { name: string, version: string },
+   * }} handlers
    */
   constructor(handlers) {
-    this.write = handlers.write;
     this.onNotification = handlers.onNotification ?? (() => {});
     this.onRequest = handlers.onRequest ?? (async () => {
       throw new AcpError('unhandled request');
     });
-    this.nextId = 1;
-    /** @type {Map<number, { resolve: (value: any) => void, reject: (error: Error) => void }>} */
-    this.pending = new Map();
-    this.buffer = '';
+    this.app = acp.client({
+      name: handlers.clientInfo?.name ?? 'minimax-bot-linux',
+      version: handlers.clientInfo?.version ?? '0.1.0',
+    });
+    this.app.onRequest('*', async (ctx) => this.onRequest(ctx.method, ctx.params));
+    this.app.onNotification('*', (ctx) => {
+      this.onNotification(ctx.method, ctx.params);
+    });
+    const stream = acp.ndJsonStream(
+      Writable.toWeb(handlers.output),
+      Readable.toWeb(handlers.input),
+    );
+    this.connection = this.app.connect(stream);
+    this.context = this.connection.agent;
     this.closed = false;
   }
 
-  /** @param {string} chunk */
-  push(chunk) {
-    this.buffer += chunk;
-    let newline = this.buffer.indexOf('\n');
-    while (newline !== -1) {
-      const line = this.buffer.slice(0, newline).trim();
-      this.buffer = this.buffer.slice(newline + 1);
-      if (line) this.#dispatch(line);
-      newline = this.buffer.indexOf('\n');
-    }
+  /**
+   * @param {string} method
+   * @param {unknown} [params]
+   */
+  request(method, params) {
+    if (this.closed) return Promise.reject(new AcpError('ACP connection closed'));
+    return /** @type {Promise<any>} */ (this.context.request(method, params ?? {}));
   }
 
+  /**
+   * @param {string} method
+   * @param {unknown} [params]
+   */
+  notify(method, params) {
+    if (this.closed) return Promise.resolve();
+    return /** @type {Promise<any>} */ (this.context.notify(method, params ?? {}));
+  }
+
+  /** Closes the connection and rejects anything still pending. */
   fail(error) {
     if (this.closed) return;
     this.closed = true;
-    for (const waiter of this.pending.values()) waiter.reject(error);
-    this.pending.clear();
+    this.connection.close(error);
   }
 
-  /** @param {string} method @param {unknown} [params] */
-  request(method, params) {
-    if (this.closed) return Promise.reject(new AcpError('ACP connection closed', -32000));
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      // Register before writing. A transport may answer inside write, and the
-      // response would otherwise arrive before this request is waiting for it.
-      this.pending.set(id, { resolve, reject });
-      this.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params: params ?? {} })}\n`);
-    });
-  }
-
-  /** @param {string} method @param {unknown} [params] */
-  notify(method, params) {
-    if (this.closed) return;
-    this.write(`${JSON.stringify({ jsonrpc: '2.0', method, params: params ?? {} })}\n`);
-  }
-
-  /** @param {number | string} id @param {unknown} result */
-  respond(id, result) {
-    if (this.closed) return;
-    this.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`);
-  }
-
-  /** @param {number | string} id @param {{ code: number, message: string }} error */
-  respondError(id, error) {
-    if (this.closed) return;
-    this.write(`${JSON.stringify({ jsonrpc: '2.0', id, error })}\n`);
-  }
-
-  /** @param {string} line */
-  #dispatch(line) {
-    let message;
-    try {
-      message = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (message.id !== undefined && message.method) {
-      Promise.resolve(this.onRequest(message.method, message.params ?? {}))
-        .then((result) => this.respond(message.id, result ?? {}))
-        .catch((error) => this.respondError(message.id, { code: -32000, message: error?.message ?? 'request failed' }));
-      return;
-    }
-    if (message.id !== undefined) {
-      const waiter = this.pending.get(message.id);
-      if (!waiter) return;
-      this.pending.delete(message.id);
-      if (message.error) waiter.reject(new AcpError(message.error.message ?? 'ACP error', message.error.code));
-      else waiter.resolve(message.result);
-      return;
-    }
-    if (message.method) this.onNotification(message.method, message.params ?? {});
+  /** Resolves when the connection ends. */
+  get closedPromise() {
+    return this.connection.closed;
   }
 }

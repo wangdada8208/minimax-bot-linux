@@ -83,7 +83,7 @@ sudo systemctl enable --now minimax-bot
 
 ## 跟踪上游
 
-本宿主锁定在一个上游提交上，记录在 [`upstream.lock.json`](upstream.lock.json)（目前是 MiniMax Bot **0.7.15**）。Docker 镜像和安装脚本都会检出这个确切的提交，所以部署结果可复现。
+本宿主锁定在一个上游提交上，记录在 [`upstream.lock.json`](upstream.lock.json)（目前是 MiniMax Bot **0.7.18**）。Docker 镜像和安装脚本都会检出这个确切的提交，所以部署结果可复现。
 
 ```sh
 npm run update-upstream      # 把锁定版本推进到上游 main 最新
@@ -105,3 +105,19 @@ npm test
 ```
 
 测试使用假的 ACP 进程，不会调用 MiniMax。
+
+## 复用了哪些官方实现，哪些官方没有
+
+对照 `minimax-code` 的锁定版本核对过：
+
+| 宿主中的部分 | 官方有吗 | 这里怎么处理 |
+| --- | --- | --- |
+| 插件生命周期（`start`、冻结 context、先 abort 再 `dispose`） | 有，`host-runner.ts` 的 `startMiniAppModule` | 原样移植到 `src/official-host.mjs` |
+| 就绪检测（`start` 之后端口必须能连） | 有，`node-runtime.ts` 的 `connectMiniAppPort` | 移植；超时会先 dispose 再报 `READINESS_TIMEOUT` |
+| ACP 分帧、请求响应配对、通知 | 有，`@agentclientprotocol/sdk`，与官方 `packages/tui/src/acp/stdio.ts` 同一套 | `src/acp.mjs` 只是这个 SDK 的薄封装 |
+| `context.agent`（跑一轮对话） | **没有**。开源版 context 里没有 `agent` 字段，提供它的是未开源的桌面端 | 自写：`src/agent.mjs` 驱动 `mcode acp` |
+| Bot 设置用的模型目录 | **没有**。锁定版本的 CLI 不实现 `providers/list` | 自写：`src/models.mjs` 读取 OpenAI 兼容的 `/models` |
+| 手机端桥接（`/api/mobile/v1`） | **没有**。上游不存在 `api/mobile` 路由 | 自写：`src/mobile-bridge.mjs`，供第三方 App 使用 |
+| 页面访问令牌 | **没有**。官方的 token 是运行时就绪用的，不是页面凭证 | 自写：`src/token.mjs` |
+
+标 **没有** 的四项，是官方开源运行时本来就不承担的宿主职责，不是把已有代码重写了一遍。

@@ -21,9 +21,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { Agent, createServer, request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createGzip } from 'node:zlib';
 import { AcpAgent } from './agent.mjs';
+import { startMiniAppModule } from './official-host.mjs';
 import { startMobileBridge } from './mobile-bridge.mjs';
 import { newToken, presentedToken, tokenMatches } from './token.mjs';
 
@@ -68,16 +69,16 @@ const agent = {
   models: () => acp.loadModels(),
 };
 
-const pluginUrl = pathToFileURL(join(options.pluginRoot, 'miniapp/node/server.mjs'));
-const plugin = await import(pluginUrl.href);
 const mobile = await startMobileBridge({ host: '127.0.0.1', port: appPort, token });
-const abort = new AbortController();
-const lifecycle = await plugin.start({
+// Lifecycle comes from the official runner (see src/official-host.mjs); only
+// the Agent is ours, because the open-source runtime does not define one.
+const lifecycle = await startMiniAppModule({
   pluginId: 'minimax-bot',
-  pluginRoot: options.pluginRoot,
+  processGeneration: `gen_${Date.now().toString(36)}`,
+  packageRoot: options.pluginRoot,
+  nodeEntry: 'miniapp/node/server.mjs',
   dataDir: options.dataDir,
   listen: { host: '127.0.0.1', port: appPort },
-  signal: abort.signal,
   logger: {
     debug: () => {},
     info: (message) => console.error(`[minimax-bot] ${message}`),
@@ -182,12 +183,11 @@ let stopping = false;
 const stop = async () => {
   if (stopping) return;
   stopping = true;
-  abort.abort();
   mobile.close();
   appAgent.destroy();
   mobileAgent.destroy();
   await acp.dispose();
-  await lifecycle?.dispose?.();
+  await lifecycle?.stop?.();
   guard.close();
 };
 process.on('SIGINT', () => void stop().then(() => process.exit(0)));

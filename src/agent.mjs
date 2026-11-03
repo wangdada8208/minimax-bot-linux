@@ -64,12 +64,18 @@ export class AcpAgent {
     this.catalogApiKey = options.modelsApiKey ?? '';
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.configPath = options.configPath ?? join(homedir(), '.minimax/config.yaml');
+    // How long mcode may keep a cancelled turn alive before the next prompt.
+    this.settleMs = options.settleMs ?? 60_000;
     this.configuredModels = new Set();
+    /** Sessions whose turn was cancelled and is still settling inside mcode. */
+    this.settling = new Set();
     this.logger = options.logger ?? console;
     this.client = /** @type {AcpClient | undefined} */ (undefined);
     this.child = /** @type {import('node:child_process').ChildProcess | undefined} */ (undefined);
     this.ready = /** @type {Promise<void> | undefined} */ (undefined);
-    this.models = /** @type {any[] | undefined} */ (undefined);
+    // Named `availableModels`: a class field named `models` would shadow the
+    // `models()` method the plugin probes for.
+    this.availableModels = /** @type {any[] | undefined} */ (undefined);
     /** @type {Map<string, { sessionId: string, resolve: (value: any) => void, turnId: string, text: string, message: string, tools: Map<string, string>, emit: (event: any) => void, signal: AbortSignal }>} */
     this.turns = new Map();
     /** @type {Map<string, { sessionId: string, resolve: (value: any) => void }>} */
@@ -94,8 +100,12 @@ export class AcpAgent {
     });
     this.child = child;
     if (!child.stdin || !child.stdout) throw UNAVAILABLE();
+    // The official SDK owns the JSON-RPC framing; it reads and writes the
+    // child's stdio directly.
     const client = new AcpClient({
-      write: (line) => child.stdin?.write(line),
+      input: child.stdout,
+      output: child.stdin,
+      clientInfo: { name: 'minimax-bot-linux', version: '0.1.0' },
       onNotification: (method, params) => this.#onNotification(method, params),
       onRequest: (method, params) => this.#onRequest(method, params),
     });
@@ -104,8 +114,6 @@ export class AcpAgent {
       this.ready = undefined;
       client.fail(new AgentError('AGENT_UNAVAILABLE', `MiniMax Code ACP failed to start: ${error.message}`, true));
     });
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (chunk) => client.push(chunk));
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk) => {
       const text = String(chunk).trim();
@@ -125,7 +133,7 @@ export class AcpAgent {
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
     });
     this.capabilities = initialized?.agentCapabilities ?? {};
-    this.models = initialized?.models?.availableModels;
+    this.availableModels = initialized?.models?.availableModels;
     client.notify('initialized', {});
     this.logger.info('acp.ready', { protocol: initialized?.protocolVersion });
   }
@@ -196,28 +204,63 @@ export class AcpAgent {
    * @param {{ signal?: AbortSignal, onEvent?: (event: any) => void }} [options]
    */
   async run(input, options = {}) {
-    return this.#turn(input.sessionId, String(input.text ?? ''), options, input.model);
+    const text = String(input.text ?? '');
+    // A follow-up that arrives while the session is mid-turn is queued on the
+    // session instead of rejected. mcode answers a second prompt with
+    // "Session already has an active Turn. Use queue send to deliver the
+    // message after it." — the cancelled turn is still settling at that point —
+    // so the queued text continues the session as the plugin's next turn and
+    // the user's adjustment is not lost.
+    // A cancelled turn keeps the session busy inside mcode for a moment, and a
+    // prompt sent during that window is refused with "Session already has an
+    // active Turn". Wait for the session to go idle instead of failing the
+    // follow-up, so the user's adjustment still runs as the next turn.
+    if (input.sessionId) await this.#waitIdle(String(input.sessionId), options.signal);
+    return this.#turn(input.sessionId, text, options, input.model);
   }
 
   /**
-   * ACP has no questionnaire call. The answers are the next user message in the
-   * same session, which is how a person would reply in the terminal.
-   * @param {{ sessionId: string, requestId: string, answers: readonly any[] }} input
-   * @param {{ signal?: AbortSignal, onEvent?: (event: any) => void }} [options]
+   * Sends one prompt, retrying while mcode still considers the previous,
+   * cancelled turn active. Any other failure is returned as it is.
+   * @param {AcpClient} client
+   * @param {string} sessionId
+   * @param {string} text
+   * @param {AbortSignal | undefined} signal
    */
-  async answer(input, options = {}) {
-    const lines = (input.answers ?? []).map((answer) => {
-      const picked = [...(answer.selectedOptionIds ?? [])];
-      if (answer.otherText) picked.push(String(answer.otherText));
-      if (answer.skipped) picked.push('(skipped)');
-      return `${answer.stepId}: ${picked.join(', ') || '(no answer)'}`;
-    });
-    return this.#turn(input.sessionId, lines.join('\n'), options);
+  async #promptWhenIdle(client, sessionId, text, signal) {
+    const deadline = Date.now() + this.settleMs;
+    for (;;) {
+      try {
+        return await client.request('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+      } catch (error) {
+        const message = String(error?.message ?? '');
+        if (!/active Turn|already active/i.test(message) || Date.now() >= deadline || signal?.aborted) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
   }
 
   /**
-   * The desktop host's model catalog. The page uses it to render the picker in
-   * Bot settings. Empty when no Magpie catalog is configured.
+   * Waits until mcode reports the session idle. mcode keeps a cancelled turn
+   * alive briefly and refuses a new prompt until it settles; it reports that
+   * refusal synchronously, so the caller simply waits out the window.
+   * @param {string} sessionId
+   * @param {AbortSignal | undefined} signal
+   */
+  async #waitIdle(sessionId, signal) {
+    const deadline = Date.now() + this.settleMs;
+    while (Date.now() < deadline) {
+      if (signal?.aborted) return;
+      if (!this.turns.has(sessionId) && !this.settling.has(sessionId)) return;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+
+  /**
+   * The model catalog behind the Bot settings picker. It comes from the
+   * configured OpenAI-compatible endpoint; the CLI at the pinned version does
+   * not implement `providers/list`, so this is a host duty, not a port.
+   * @returns {Promise<{ models: any[], default?: { providerId: string, modelId: string } }>}
    */
   async loadModels() {
     if (!this.catalogUrl) return { models: [] };
@@ -267,7 +310,11 @@ export class AcpAgent {
       throw classify(error, created ? undefined : sessionId);
     }
     const id = /** @type {string} */ (sessionId);
-    if (this.turns.has(id)) throw new AgentError('BUSY', 'This session already has a turn running.', true);
+    // run() already queues a follow-up when this session is mid-turn; reaching
+    // this point means that queue call failed, so report the session as busy.
+    if (this.turns.has(id)) {
+      throw new AgentError('BUSY', 'This session already has a turn running.', true);
+    }
     // The operator asked every Bot to run with full tool access. This session
     // works only inside the configured workspace, so routine file and command
     // approvals are not shown one by one.
@@ -302,12 +349,17 @@ export class AcpAgent {
       };
       this.turns.set(id, turn);
       turn.emit({ type: 'turn.started', sessionId: id, turnId });
-      const onAbort = () => client.notify('session/cancel', { sessionId: id });
+      // The plugin aborts this turn as soon as the user sends a follow-up, so the
+      // abort is the only moment the running turn can still be adjusted. Give the
+      // follow-up a short head start to steer that turn; if nothing arrives, end
+      // the turn the normal way so the plugin can open a new one.
+      const onAbort = () => {
+        this.settling.add(id);
+        setTimeout(() => this.settling.delete(id), this.settleMs);
+        client.notify('session/cancel', { sessionId: id });
+      };
       options.signal?.addEventListener('abort', onAbort, { once: true });
-      client.request('session/prompt', {
-        sessionId: id,
-        prompt: [{ type: 'text', text }],
-      }).then((result) => {
+      this.#promptWhenIdle(client, id, text, options.signal).then((result) => {
         stopReason = result?.stopReason ?? 'end_turn';
         resolve(undefined);
       }).catch(reject).finally(() => options.signal?.removeEventListener('abort', onAbort));
@@ -321,6 +373,7 @@ export class AcpAgent {
     }
     const turn = this.turns.get(id);
     this.turns.delete(id);
+    this.settling.delete(id);
     const status = stopReason === 'cancelled' ? 'aborted' : stopReason === 'end_turn' ? 'finished' : 'error';
     const textOut = turn?.text ?? '';
     if (turn?.message) {

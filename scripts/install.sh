@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_URL="${MINIMAX_UPSTREAM_REPO:-https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git}"
 UPSTREAM_DIR="${MINIMAX_UPSTREAM_DIR:-$ROOT/../MiniMax-Code-MiniApps}"
 PLUGIN_REL="plugins/minimax-ai/minimax-bot"
-COMMIT="$(node -p "require('$ROOT/upstream.lock.json').commit")"
+COMMIT="$(node -p "require('$ROOT/upstream.lock.json').plugin.commit")"
 
 command -v node >/dev/null || { echo "Install Node.js 22.19+ first: https://nodejs.org"; exit 1; }
 node -e 'const [a,b]=process.versions.node.split(".").map(Number); if(a<22||(a===22&&b<19)) { console.error("Node 22.19+ required, found "+process.versions.node); process.exit(1); }'

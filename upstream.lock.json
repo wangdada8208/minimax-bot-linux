@@ -1,7 +1,16 @@
 {
-  "repository": "MiniMax-AI/MiniMax-Code-MiniApps",
-  "pluginPath": "plugins/minimax-ai/minimax-bot",
-  "commit": "c4bfe68e12c42a3a8128081ed5238b0689bb03b5",
-  "pluginVersion": "0.7.18",
-  "checkedAt": "2026-11-03"
+  "plugin": {
+    "repository": "MiniMax-AI/MiniMax-Code-MiniApps",
+    "path": "plugins/minimax-ai/minimax-bot",
+    "commit": "c4bfe68e12c42a3a8128081ed5238b0689bb03b5",
+    "version": "0.7.18",
+    "checkedAt": "2026-11-03"
+  },
+  "runtime": {
+    "repository": "MiniMax-AI/minimax-code",
+    "source": "packages/local-runtime-v2/src/service/miniapp/process/node-runtime/host-runner.ts",
+    "commit": "6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc",
+    "portedInto": "src/official-host.mjs",
+    "checkedAt": "2026-11-03"
+  }
 }

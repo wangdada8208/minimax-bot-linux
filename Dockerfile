@@ -19,7 +19,7 @@ COPY upstream.lock.json ./
 
 # Fetch the exact upstream plugin commit recorded in upstream.lock.json.
 RUN set -eux; \
-  commit="$(node -p "require('/app/upstream.lock.json').commit")"; \
+  commit="$(node -p "require('/app/upstream.lock.json').plugin.commit")"; \
   git clone "$UPSTREAM_REPO" /opt/upstream; \
   git -C /opt/upstream fetch origin "$commit" --depth 1 || git -C /opt/upstream fetch origin main --depth 1; \
   git -C /opt/upstream checkout --detach "$commit"
