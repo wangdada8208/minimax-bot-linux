@@ -70,17 +70,19 @@
       dialog.appendChild(title);
       dialog.appendChild(sub);
 
-      function row(label, value) {
+      var rowEls = {};
+      function row(key, label, value) {
         var r = document.createElement('div');
         r.className = 'host-update-row';
         var a = document.createElement('span'); a.textContent = label;
         var b = document.createElement('code'); b.textContent = value;
         r.appendChild(a); r.appendChild(b);
         dialog.appendChild(r);
+        rowEls[key] = b;
       }
-      row(text('正在运行', 'Running'), short(info && (info.running || info.current)));
-      row(text('磁盘上', 'On disk'), short(info && (info.disk || info.current)));
-      row(text('远端最新', 'Remote'), short(info && info.remote));
+      row('running', text('正在运行', 'Running'), short(info && (info.running || info.current)));
+      row('disk', text('磁盘上', 'On disk'), short(info && (info.disk || info.current)));
+      row('remote', text('远端最新', 'Remote'), short(info && info.remote));
 
       var status = document.createElement('div');
       status.className = 'host-update-status';
@@ -115,6 +117,12 @@
         status.className = 'host-update-status';
         commits.textContent = '';
         applyBtn.disabled = true;
+        // Keep the version rows honest after an update changes what is on disk.
+        if (next && next.ok) {
+          if (next.running || next.current) rowEls.running.textContent = short(next.running || next.current);
+          if (next.disk || next.to) rowEls.disk.textContent = short(next.disk || next.to);
+          if (next.remote || next.to) rowEls.remote.textContent = short(next.remote || next.to);
+        }
         if (!next || !next.ok) {
           status.classList.add('bad');
           status.textContent = (next && next.reason) || text('检查失败。', 'Check failed.');
