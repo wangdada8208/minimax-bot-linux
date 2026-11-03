@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { createGzip } from 'node:zlib';
 import { AcpAgent } from './agent.mjs';
 import { HostMiniAppPortRegistry, startMiniAppModule } from './official-host.mjs';
+import { SelfUpdate } from './self-update.mjs';
 import { startMobileBridge } from './mobile-bridge.mjs';
 import { newToken, presentedToken, tokenMatches } from './token.mjs';
 
@@ -93,7 +94,11 @@ const lifecycle = await startMiniAppModule({
 });
 const pluginPort = lifecycle.port;
 // It proxies to the plugin on pluginPort, so it keeps a separate listener.
-const mobile = await startMobileBridge({ host: '127.0.0.1', port: mobilePort, token });
+const selfUpdate = new SelfUpdate({
+  root,
+  logger: { warn: (message) => console.error(`[bot] warn ${message}`) },
+});
+// It proxies to the plugin on pluginPort({ host: '127.0.0.1', port: mobilePort, token });
 
 // One pooled agent per upstream so the browser's keep-alive connection is
 // reused for every module, stylesheet and API call.
@@ -118,6 +123,33 @@ const guard = createServer((request, response) => {
       'content-length': '0',
     });
     response.end();
+    return;
+  }
+  // The update page is served by this host, not by the plugin, so the plugin
+  // stays a byte-for-byte upstream copy.
+  if (url.pathname === '/update') {
+    const page = readFileSync(join(here, 'update-page.html'));
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-length': page.length });
+    response.end(page);
+    return;
+  }
+  // The update button talks to the checkout this process runs from.
+  if (url.pathname === '/api/update' || url.pathname === '/api/update/apply') {
+    const isApply = url.pathname === '/api/update/apply';
+    if (isApply && request.method !== 'POST') {
+      response.writeHead(405, { 'content-type': 'application/json; charset=utf-8', allow: 'POST' });
+      response.end(JSON.stringify({ ok: false, reason: 'Use POST.' }));
+      return;
+    }
+    void (isApply ? selfUpdate.apply() : selfUpdate.check())
+      .then((result) => {
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        response.end(JSON.stringify(result));
+      })
+      .catch((error) => {
+        response.writeHead(500, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+        response.end(JSON.stringify({ ok: false, reason: String(error?.message ?? 'update failed') }));
+      });
     return;
   }
   const mobilePath = url.pathname.startsWith('/api/mobile/');

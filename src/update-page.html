@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>更新 MiniMax Bot</title>
+<style>
+  :root { color-scheme: light dark; --fg: #17181c; --muted: #5c6270; --line: #e3e5ea; --bg: #fff; --card: #f7f8fa; --ok: #1a7f47; --warn: #a15c00; --bad: #b3261e; --accent: #2f6bff; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #e8eaee; --muted: #9aa1ae; --line: #2a2e36; --bg: #14161a; --card: #1b1e24; --ok: #57c98a; --warn: #e0a34a; --bad: #f2685f; --accent: #6f9bff; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 20px; background: var(--bg); color: var(--fg); font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 680px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { margin: 0 0 24px; color: var(--muted); font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 6px 0; }
+  .row + .row { border-top: 1px solid var(--line); }
+  .label { color: var(--muted); font-size: 13px; }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 10px; padding: 10px 20px; cursor: pointer; background: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .notice { border-radius: 10px; padding: 12px 14px; font-size: 14px; margin-top: 16px; border: 1px solid var(--line); }
+  .notice.blocked { border-color: var(--bad); color: var(--bad); }
+  .notice.good { border-color: var(--ok); color: var(--ok); }
+  .notice.warn { border-color: var(--warn); color: var(--warn); }
+  ul.commits { margin: 10px 0 0; padding-left: 18px; font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
+  ul.commits li { margin: 2px 0; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>更新 MiniMax Bot</h1>
+  <p class="sub">检查并应用本机这份代码的更新。更新只落在磁盘上，重启后才生效。</p>
+
+  <div class="card">
+    <div class="row"><span class="label">当前版本</span><code id="current">读取中…</code></div>
+    <div class="row"><span class="label">最新版本</span><code id="remote">—</code></div>
+    <div class="row"><span class="label">状态</span><span class="status" id="status"><span class="dot"></span><span id="statusText">正在检查…</span></span></div>
+  </div>
+
+  <div id="notice" class="notice hidden"></div>
+  <ul id="commits" class="commits hidden"></ul>
+
+  <div class="actions">
+    <button id="check" class="ghost">重新检查</button>
+    <button id="apply" disabled>更新到最新</button>
+    <button id="restart" class="ghost hidden">如何重启</button>
+  </div>
+
+  <div id="restartHint" class="notice warn hidden"></div>
+</main>
+
+<script>
+(function () {
+  var current = document.getElementById('current');
+  var remote = document.getElementById('remote');
+  var statusDot = document.querySelector('#status .dot');
+  var statusText = document.getElementById('statusText');
+  var notice = document.getElementById('notice');
+  var commits = document.getElementById('commits');
+  var checkBtn = document.getElementById('check');
+  var applyBtn = document.getElementById('apply');
+  var restartBtn = document.getElementById('restart');
+  var restartHint = document.getElementById('restartHint');
+
+  function short(sha) { return String(sha || '').slice(0, 7) || '—'; }
+  function showNotice(kind, text) {
+    notice.className = 'notice ' + kind;
+    notice.textContent = text;
+    notice.classList.remove('hidden');
+  }
+  function hideNotice() { notice.classList.add('hidden'); }
+  function setStatus(kind, text) { statusDot.className = 'dot ' + kind; statusText.textContent = text; }
+
+  function render(info) {
+    current.textContent = short(info.current);
+    remote.textContent = short(info.remote);
+    hideNotice();
+    commits.classList.add('hidden');
+    applyBtn.disabled = true;
+    restartBtn.classList.add('hidden');
+    restartHint.classList.add('hidden');
+
+    if (!info.ok) {
+      setStatus('bad', '无法检查');
+      showNotice('blocked', info.reason || '检查更新失败。');
+      return;
+    }
+    if (info.restartRequired) {
+      setStatus('warn', '已更新，等待重启');
+      showNotice('warn', '更新已写入磁盘。重启宿主后生效。');
+      restartBtn.classList.remove('hidden');
+      return;
+    }
+    if (!info.updateAvailable) {
+      setStatus('ok', '已是最新');
+      return;
+    }
+    setStatus('warn', '有 ' + info.behind + ' 个新提交');
+    if (!info.canUpdate) {
+      showNotice('blocked', '不要更新：' + (info.blockedReason || '本地改动会导致冲突。'));
+      return;
+    }
+    showNotice('good', '可以安全更新。');
+    applyBtn.disabled = false;
+    if (info.commits && info.commits.length) {
+      commits.innerHTML = '';
+      info.commits.slice(0, 10).forEach(function (line) {
+        var li = document.createElement('li');
+        li.textContent = line;
+        commits.appendChild(li);
+      });
+      commits.classList.remove('hidden');
+    }
+  }
+
+  function check() {
+    checkBtn.disabled = true;
+    applyBtn.disabled = true;
+    setStatus('', '正在检查…');
+    fetch('/api/update', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(render)
+      .catch(function (e) { setStatus('bad', '无法检查'); showNotice('blocked', String(e)); })
+      .finally(function () { checkBtn.disabled = false; });
+  }
+
+  checkBtn.addEventListener('click', check);
+
+  applyBtn.addEventListener('click', function () {
+    applyBtn.disabled = true;
+    setStatus('', '正在更新…');
+    fetch('/api/update/apply', { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (result) {
+        if (!result.ok) { render({ ok: false, reason: result.reason }); return; }
+        render({ ok: true, current: result.to || result.current, remote: result.to || result.current, updateAvailable: false, canUpdate: true, restartRequired: result.restartRequired, behind: 0 });
+      })
+      .catch(function (e) { setStatus('bad', '更新失败'); showNotice('blocked', String(e)); });
+  });
+
+  restartBtn.addEventListener('click', function () {
+    restartHint.textContent = '宿主的看守进程每 30 秒检查一次；停止当前进程后它会自动拉起新版本。在服务器上执行：pkill -f "node src/host.mjs"';
+    restartHint.classList.remove('hidden');
+  });
+
+  check();
+})();
+</script>
+</body>
+</html>
