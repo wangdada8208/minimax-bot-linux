@@ -90,6 +90,9 @@ Checked against `minimax-code` at the pinned runtime commit:
 | --- | --- | --- |
 | Plugin lifecycle (`start`, frozen context, abort then `dispose`) | Yes — `startMiniAppModule` in `host-runner.ts` | Ported verbatim into `src/official-host.mjs` |
 | Readiness (the port must accept a connection after `start`) | Yes — `connectMiniAppPort` in `node-runtime.ts` | Ported; a timeout disposes the plugin and reports `READINESS_TIMEOUT` |
+| Port authority (reserve the loopback port before spawning, retry the next candidate on `EADDRINUSE`) | Yes — `HostMiniAppPortRegistry` in `port-registry.ts`, driven by `prepareRuntime` | Ported; a reservation is released on failure and on `stop` |
+| Connector tools (`hostConnectorAccess`) | Yes, but **optional**: only used when a Mini App declares `hostConnectorAccess` in its manifest | Not ported — MiniMax Bot does not declare it and never calls `context.hostConnector` (verified by search over the whole plugin) |
+| Multi-generation supervisor (lease, prepare/commit/rollback across runtime generations) | Yes — `supervisor/` | Not ported — this host runs one pinned plugin version and restarts to change it |
 | ACP framing, request/response matching, notifications | Yes — `@agentclientprotocol/sdk`, as upstream uses it in `packages/tui/src/acp/stdio.ts` | `src/acp.mjs` is a thin wrapper over that SDK |
 | `context.agent` (running a turn) | **No** — the open-source context has no `agent` field, and the desktop host that supplies it is not in this repository | Written here: `src/agent.mjs` drives `mcode acp` |
 | Model catalog for the Bot settings picker | **No** — `providers/list` is not implemented by the CLI at the pinned version | Written here: `src/models.mjs` reads an OpenAI-compatible `/models` endpoint |

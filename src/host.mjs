@@ -24,7 +24,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGzip } from 'node:zlib';
 import { AcpAgent } from './agent.mjs';
-import { startMiniAppModule } from './official-host.mjs';
+import { HostMiniAppPortRegistry, startMiniAppModule } from './official-host.mjs';
 import { startMobileBridge } from './mobile-bridge.mjs';
 import { newToken, presentedToken, tokenMatches } from './token.mjs';
 
@@ -49,6 +49,7 @@ const token = process.env.MINIMAX_BOT_TOKEN || readToken(tokenPath);
 if (!process.env.MINIMAX_BOT_TOKEN) writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
 
 const appPort = await freePort();
+const mobilePort = await freePort();
 const mcodeTarget = resolve(options.mcode);
 const acp = new AcpAgent({
   command: mcodeTarget.endsWith('.js') ? options.node : options.mcode,
@@ -69,10 +70,13 @@ const agent = {
   models: () => acp.loadModels(),
 };
 
-const mobile = await startMobileBridge({ host: '127.0.0.1', port: appPort, token });
+// Official port authority: the plugin reserves its loopback port there, so the
+// mobile bridge must stay off it.
+const portRegistry = new HostMiniAppPortRegistry();
 // Lifecycle comes from the official runner (see src/official-host.mjs); only
 // the Agent is ours, because the open-source runtime does not define one.
 const lifecycle = await startMiniAppModule({
+  registry: portRegistry,
   pluginId: 'minimax-bot',
   processGeneration: `gen_${Date.now().toString(36)}`,
   packageRoot: options.pluginRoot,
@@ -87,6 +91,9 @@ const lifecycle = await startMiniAppModule({
   },
   agent,
 });
+const pluginPort = lifecycle.port;
+// It proxies to the plugin on pluginPort, so it keeps a separate listener.
+const mobile = await startMobileBridge({ host: '127.0.0.1', port: mobilePort, token });
 
 // One pooled agent per upstream so the browser's keep-alive connection is
 // reused for every module, stylesheet and API call.
@@ -117,10 +124,10 @@ const guard = createServer((request, response) => {
   const upstream = httpRequest(
     {
       host: '127.0.0.1',
-      port: mobilePath ? mobile.port : appPort,
+      port: mobilePath ? mobile.port : pluginPort,
       method: request.method,
       path: request.url,
-      headers: { ...request.headers, host: `127.0.0.1:${mobilePath ? mobile.port : appPort}` },
+      headers: { ...request.headers, host: `127.0.0.1:${mobilePath ? mobile.port : pluginPort}` },
       agent: mobilePath ? mobileAgent : appAgent,
     },
     (reply) => {

@@ -21,6 +21,52 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
+ * Port of `HostMiniAppPortRegistry` from
+ * `node-runtime/port-registry.ts`. Upstream reserves a loopback port per
+ * process generation so two runtimes cannot claim the same one; reserving is
+ * what makes a retry on `EADDRINUSE` meaningful instead of racy.
+ */
+export class HostMiniAppPortRegistry {
+  /** @param {Iterable<number>} [productReserved] */
+  constructor(productReserved = []) {
+    this.productReserved = new Set(productReserved);
+    /** @type {Map<number, { pluginId: string, processGeneration: string }>} */
+    this.owners = new Map();
+  }
+
+  /** @param {{ pluginId: string, port: number }} input */
+  isReserved(input) {
+    return this.productReserved.has(input.port) || this.owners.has(input.port);
+  }
+
+  /**
+   * @param {{ pluginId: string, port: number, processGeneration: string }} input
+   * @returns {{ release(): void } | undefined}
+   */
+  reserve(input) {
+    if (this.productReserved.has(input.port) || this.owners.has(input.port)) return undefined;
+    const owner = Object.freeze({
+      pluginId: input.pluginId,
+      processGeneration: input.processGeneration,
+    });
+    this.owners.set(input.port, owner);
+    let released = false;
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        if (this.owners.get(input.port) === owner) this.owners.delete(input.port);
+      },
+    };
+  }
+}
+
+/** Upstream `retryablePortError`: a busy port is worth another candidate. */
+function retryablePortError(error) {
+  return Boolean(error && typeof error === 'object' && /** @type {any} */ (error).code === 'EADDRINUSE');
+}
+
+/**
  * Upstream readiness: after `start` resolves, the port must accept a
  * connection. `node-runtime.ts` retries until a deadline and reports
  * `READINESS_TIMEOUT`; the same rule applies here.
@@ -84,21 +130,64 @@ export class OfficialHostError extends Error {
  *   emit?: (message: any) => void,
  *   resolveRealPath?: (target: string) => Promise<string>,
  *   loadModule?: (url: string) => Promise<unknown>,
+ *   awaitReadiness?: boolean,
+ *   readinessTimeoutMs?: number,
+ *   readinessRetryMs?: number,
+ *   registry?: HostMiniAppPortRegistry,
  * }} [options]
- * @returns {Promise<{ stop: () => Promise<void> }>}
+ * @returns {Promise<{ stop: () => Promise<void>, port: number }>}
  */
 export async function startMiniAppModule(init, options = {}) {
   const resolveRealPath = options.resolveRealPath ?? realpath;
   const packageRoot = await resolveRealPath(init.packageRoot);
   const start = await loadStartFunction(init, packageRoot, resolveRealPath, options.loadModule);
+  // Upstream reserves the loopback port before spawning the runner, then turns
+  // an `EADDRINUSE` into a retry on the next candidate port. Without the
+  // reservation two starts can pick the same port and the loser dies late.
+  const registry = options.registry ?? defaultRegistry;
+  const maxAttempts = options.maxPortAttempts ?? 3;
+  /** @type {unknown} */
+  let lastError;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const port = init.listen.port + attempt;
+    const reservation = registry.reserve({
+      pluginId: init.pluginId,
+      port,
+      processGeneration: init.processGeneration,
+    });
+    if (!reservation) {
+      lastError ??= new OfficialHostError('NO_CANDIDATE_PORT', `Port ${port} is already reserved`);
+      continue;
+    }
+    try {
+      return await startOnPort(init, options, { packageRoot, start, port, reservation });
+    } catch (error) {
+      reservation.release();
+      lastError = error;
+      if (!retryablePortError(error) || attempt + 1 >= maxAttempts) throw error;
+      init.logger?.warn?.(`port ${port} busy, trying ${port + 1}`);
+    }
+  }
+  throw lastError ?? new OfficialHostError('NO_CANDIDATE_PORT', 'No loopback port is available');
+}
+
+/** The process-wide registry, as upstream keeps one per runtime. */
+const defaultRegistry = new HostMiniAppPortRegistry();
+
+/**
+ * One start attempt on a reserved port.
+ * @param {any} init @param {any} options
+ * @param {{ packageRoot: string, start: (context: any) => any, port: number, reservation: { release(): void } }} attempt
+ */
+async function startOnPort(init, options, attempt) {
   const abortController = new AbortController();
   const logger = createLogger(options.emit, init.logger);
   const context = Object.freeze({
     pluginId: init.pluginId,
-    pluginRoot: packageRoot,
+    pluginRoot: attempt.packageRoot,
     dataDir: init.dataDir,
     generationId: init.processGeneration,
-    listen: Object.freeze({ ...init.listen }),
+    listen: Object.freeze({ ...init.listen, port: attempt.port }),
     signal: abortController.signal,
     logger,
     ...(init.agent ? { agent: init.agent } : {}),
@@ -106,7 +195,7 @@ export async function startMiniAppModule(init, options = {}) {
   /** @type {any} */
   let result;
   try {
-    result = await start(context);
+    result = await attempt.start(context);
   } catch (error) {
     abortController.abort();
     throw error;
@@ -118,7 +207,7 @@ export async function startMiniAppModule(init, options = {}) {
     try {
       await connectMiniAppPort({
         host: init.listen.host,
-        port: init.listen.port,
+        port: attempt.port,
         timeoutMs: options.readinessTimeoutMs ?? 10000,
         retryMs: options.readinessRetryMs ?? 100,
         signal: abortController.signal,
@@ -132,10 +221,15 @@ export async function startMiniAppModule(init, options = {}) {
   /** @type {Promise<void> | undefined} */
   let stopPromise;
   return {
+    port: attempt.port,
     stop() {
       stopPromise ??= (async () => {
-        abortController.abort();
-        await dispose?.();
+        try {
+          abortController.abort();
+          await dispose?.();
+        } finally {
+          attempt.reservation.release();
+        }
       })();
       return stopPromise;
     },

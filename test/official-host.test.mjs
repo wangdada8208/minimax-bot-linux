@@ -4,7 +4,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { connectMiniAppPort, OfficialHostError, startMiniAppModule } from '../src/official-host.mjs';
+import { connectMiniAppPort, HostMiniAppPortRegistry, OfficialHostError, startMiniAppModule } from '../src/official-host.mjs';
 
 /** A package directory with an entry that exports `start` from the given source. */
 function makePackage(source) {
@@ -118,4 +118,43 @@ test('resolves once the port accepts connections', async () => {
   const port = /** @type {any} */ (server.address()).port;
   await connectMiniAppPort({ host: '127.0.0.1', port, timeoutMs: 2000, retryMs: 50 });
   await new Promise((resolve) => server.close(resolve));
+});
+
+test('the port registry refuses a second claim on the same port', () => {
+  const registry = new HostMiniAppPortRegistry();
+  const first = registry.reserve({ pluginId: 'p', port: 5000, processGeneration: 'g1' });
+  assert.ok(first, 'the first claim succeeds');
+  assert.equal(registry.reserve({ pluginId: 'p', port: 5000, processGeneration: 'g2' }), undefined);
+  assert.equal(registry.isReserved({ pluginId: 'p', port: 5000 }), true);
+  first.release();
+  assert.equal(registry.isReserved({ pluginId: 'p', port: 5000 }), false);
+  assert.ok(registry.reserve({ pluginId: 'p', port: 5000, processGeneration: 'g3' }), 'released ports can be claimed again');
+});
+
+test('a busy port retries on the next candidate', async () => {
+  const blocker = createServer((socket) => socket.end());
+  await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+  const busy = /** @type {any} */ (blocker.address()).port;
+  const { root, entry } = makePackage(`
+    export async function start(context) {
+      const http = await import('node:http');
+      const server = http.createServer((req, res) => res.end('ok'));
+      await new Promise((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(context.listen.port, context.listen.host, resolve);
+      });
+      return { dispose: async () => { await new Promise((r) => server.close(r)); } };
+    }
+  `);
+  const running = await startMiniAppModule({
+    pluginId: 'p',
+    processGeneration: 'g',
+    packageRoot: root,
+    nodeEntry: entry,
+    dataDir: root,
+    listen: { host: '127.0.0.1', port: busy },
+  });
+  assert.notEqual(running.port, busy, 'it moved to another port');
+  await running.stop();
+  await new Promise((resolve) => blocker.close(resolve));
 });

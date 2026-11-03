@@ -114,6 +114,9 @@ npm test
 | --- | --- | --- |
 | 插件生命周期（`start`、冻结 context、先 abort 再 `dispose`） | 有，`host-runner.ts` 的 `startMiniAppModule` | 原样移植到 `src/official-host.mjs` |
 | 就绪检测（`start` 之后端口必须能连） | 有，`node-runtime.ts` 的 `connectMiniAppPort` | 移植；超时会先 dispose 再报 `READINESS_TIMEOUT` |
+| 端口权威（启动前预留回环端口，`EADDRINUSE` 时换下一个候选端口重试） | 有，`port-registry.ts` 的 `HostMiniAppPortRegistry`，由 `prepareRuntime` 驱动 | 移植；失败和 `stop` 时都会释放预留 |
+| 连接器工具（`hostConnectorAccess`） | 有，但**是可选项**：只有 Mini App 在清单里声明 `hostConnectorAccess` 才会用到 | 未移植 —— MiniMax Bot 没有声明，且整个插件搜不到 `context.hostConnector` 的调用 |
+| 多代运行时管理器（租约、逐代 prepare/commit/rollback） | 有，`supervisor/` | 未移植 —— 本宿主只跑一个锁定版本的插件，换版本靠重启 |
 | ACP 分帧、请求响应配对、通知 | 有，`@agentclientprotocol/sdk`，与官方 `packages/tui/src/acp/stdio.ts` 同一套 | `src/acp.mjs` 只是这个 SDK 的薄封装 |
 | `context.agent`（跑一轮对话） | **没有**。开源版 context 里没有 `agent` 字段，提供它的是未开源的桌面端 | 自写：`src/agent.mjs` 驱动 `mcode acp` |
 | Bot 设置用的模型目录 | **没有**。锁定版本的 CLI 不实现 `providers/list` | 自写：`src/models.mjs` 读取 OpenAI 兼容的 `/models` |
