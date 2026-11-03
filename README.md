@@ -124,20 +124,22 @@ npm test
 
 The tests use a fake ACP process. They do not call MiniMax.
 
-## Updating from the web
+## Updating from the page
 
-The page lives at `/update` on the same host, behind the same access token —
-for example `https://<your-domain>/update`.
+A refresh control sits in the Bot page's side rail, next to Tasks and Settings.
+It shows the running commit, the one on disk and the remote, and offers one
+button to update.
 
-Open `/update` on the same host (behind the same access token). The page shows
-the running commit, the latest commit, and whether updating is safe.
-
-- **Check** only runs `git fetch`; it never changes the checkout.
+- **Checking** only runs `git fetch`; it never changes the checkout.
 - **Update** fast-forwards the checkout, reinstalls dependencies if the lockfile
   moved, and refuses with a visible reason if anything would conflict: local
   edits, a diverged branch, a detached HEAD, or local commits not on the remote.
-- An update lands on disk. The page then says a restart is required; the
+- An update lands on disk. The control then says a restart is required; the
   watchdog restarts the host within about 30 seconds after it exits.
+
+The host injects this control when it serves the page, so the plugin's own files
+stay untouched. The policy lives in `scripts/self-update.sh`, which can also be
+run by hand.
 
 The policy lives in `scripts/self-update.sh`, which can also be run by hand:
 
