@@ -120,6 +120,25 @@
           status.textContent = (next && next.reason) || text('检查失败。', 'Check failed.');
           return;
         }
+        // Updating first when the remote is ahead: a checkout that is both
+        // behind and different from the running process should be brought up to
+        // date, then restarted, so the restart hint must not win here.
+        if (next.updateAvailable) {
+          if (!next.canUpdate) {
+            status.classList.add('bad');
+            status.textContent = text('不要更新：', 'Do not update: ') + (next.blockedReason || text('本地改动会导致冲突。', 'local changes would conflict.'));
+            return;
+          }
+          status.classList.add('ok');
+          status.textContent = text('有 ' + next.behind + ' 个新提交，可以安全更新。', next.behind + ' new commit(s); safe to update.');
+          applyBtn.disabled = false;
+          (next.commits || []).slice(0, 12).forEach(function (line) {
+            var li = document.createElement('li');
+            li.textContent = line;
+            commits.appendChild(li);
+          });
+          return;
+        }
         if (next.restartRequired) {
           status.classList.add('warn');
           status.textContent = text(
@@ -128,24 +147,8 @@
           );
           return;
         }
-        if (!next.updateAvailable) {
-          status.classList.add('ok');
-          status.textContent = text('已是最新版本。', 'Already up to date.');
-          return;
-        }
-        if (!next.canUpdate) {
-          status.classList.add('bad');
-          status.textContent = text('不要更新：', 'Do not update: ') + (next.blockedReason || text('本地改动会导致冲突。', 'local changes would conflict.'));
-          return;
-        }
         status.classList.add('ok');
-        status.textContent = text('有 ' + next.behind + ' 个新提交，可以安全更新。', next.behind + ' new commit(s); safe to update.');
-        applyBtn.disabled = false;
-        (next.commits || []).slice(0, 12).forEach(function (line) {
-          var li = document.createElement('li');
-          li.textContent = line;
-          commits.appendChild(li);
-        });
+        status.textContent = text('已是最新版本。', 'Already up to date.');
       }
 
       applyBtn.addEventListener('click', function () {
