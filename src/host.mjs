@@ -93,6 +93,33 @@ const lifecycle = await startMiniAppModule({
   agent,
 });
 const pluginPort = lifecycle.port;
+// The plugin serves its team tools (list_team, message_bot, dispatch_tasks…) as
+// an HTTP MCP endpoint. Bots can only use them once the ACP session is handed
+// this URL, so give it to the Agent as soon as the real port is known; ACP
+// starts lazily on the first turn.
+acp.mcpUrl = `http://127.0.0.1:${pluginPort}/mcp/minimax-bot`;
+// The CLI reads MCP servers from <dataDir>/mcp.json, which is /data/.minimax for
+// this machine. The plugin listens on a port chosen at start, so publish it
+// there on every boot and let the official MCP runtime connect to it.
+try {
+  const mcpConfigPath = join(homedir(), '.minimax', 'mcp.json');
+  let existing = {};
+  try {
+    existing = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+  } catch {
+    existing = {};
+  }
+  const servers = { ...(existing?.mcpServers ?? {}) };
+  servers['minimax-bot'] = {
+    type: 'http',
+    url: `http://127.0.0.1:${pluginPort}/mcp/minimax-bot`,
+  };
+  mkdirSync(dirname(mcpConfigPath), { recursive: true });
+  writeFileSync(mcpConfigPath, `${JSON.stringify({ ...existing, mcpServers: servers }, null, 2)}\n`, { mode: 0o600 });
+  console.error(`[bot] mcp.published ${mcpConfigPath}`);
+} catch (error) {
+  console.error(`[bot] warn mcp.publish_failed ${error?.message ?? 'unknown'}`);
+}
 // The phone bridge talks HTTP to the plugin and keeps its own listener.
 const mobile = await startMobileBridge({ host: '127.0.0.1', port: mobilePort, token });
 const selfUpdate = new SelfUpdate({

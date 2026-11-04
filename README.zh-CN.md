@@ -119,6 +119,7 @@ npm test
 | 多代运行时管理器（租约、逐代 prepare/commit/rollback） | 有，`supervisor/` | 未移植 —— 本宿主只跑一个锁定版本的插件，换版本靠重启 |
 | ACP 分帧、请求响应配对、通知 | 有，`@agentclientprotocol/sdk`，与官方 `packages/tui/src/acp/stdio.ts` 同一套 | `src/acp.mjs` 只是这个 SDK 的薄封装 |
 | `context.agent`（跑一轮对话） | **没有**。开源版 context 里没有 `agent` 字段，提供它的是未开源的桌面端 | 自写：`src/agent.mjs` 驱动 `mcode acp` |
+| 团队工具（`list_team`、`message_bot`、`dispatch_tasks` 等） | 有，但 CLI 只从 `<dataDir>/mcp.json` 加载 MCP，不认 ACP 会话参数 | `src/host.mjs` 每次启动把插件真实的 `/mcp/minimax-bot` 地址写进那个文件 |
 | Bot 设置用的模型目录 | **没有**。锁定版本的 CLI 不实现 `providers/list` | 自写：`src/models.mjs` 读取 OpenAI 兼容的 `/models` |
 | 手机端桥接（`/api/mobile/v1`） | **没有**。上游不存在 `api/mobile` 路由 | 自写：`src/mobile-bridge.mjs`，供第三方 App 使用 |
 | 页面访问令牌 | **没有**。官方的 token 是运行时就绪用的，不是页面凭证 | 自写：`src/token.mjs` |

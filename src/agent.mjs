@@ -66,6 +66,8 @@ export class AcpAgent {
     this.configPath = options.configPath ?? join(homedir(), '.minimax/config.yaml');
     // How long mcode may keep a cancelled turn alive before the next prompt.
     this.settleMs = options.settleMs ?? 60_000;
+    this.mcpUrl = options.mcpUrl ?? '';
+    this.mcpToken = options.mcpToken ?? '';
     this.configuredModels = new Set();
     /** Sessions whose turn was cancelled and is still settling inside mcode. */
     this.settling = new Set();
@@ -414,8 +416,23 @@ export class AcpAgent {
     await this.start();
   }
 
+  /**
+   * The plugin publishes its team tools — list_team, message_bot,
+   * dispatch_tasks and the rest — as an HTTP MCP endpoint declared in its
+   * manifest (`mcpEndpoints`). Without registering it here the Bots have no
+   * team tools at all: they can be seen on the page but not addressed.
+   */
   #mcpServers() {
-    return [];
+    if (!this.mcpUrl) return [];
+    return [
+      {
+        name: 'minimax-bot',
+        type: 'http',
+        url: this.mcpUrl,
+        // ACP takes headers as a plain object, not a name/value list.
+        headers: this.mcpToken ? { authorization: `Bearer ${this.mcpToken}` } : {},
+      },
+    ];
   }
 
   async dispose() {

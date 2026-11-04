@@ -95,6 +95,7 @@ Checked against `minimax-code` at the pinned runtime commit:
 | Multi-generation supervisor (lease, prepare/commit/rollback across runtime generations) | Yes — `supervisor/` | Not ported — this host runs one pinned plugin version and restarts to change it |
 | ACP framing, request/response matching, notifications | Yes — `@agentclientprotocol/sdk`, as upstream uses it in `packages/tui/src/acp/stdio.ts` | `src/acp.mjs` is a thin wrapper over that SDK |
 | `context.agent` (running a turn) | **No** — the open-source context has no `agent` field, and the desktop host that supplies it is not in this repository | Written here: `src/agent.mjs` drives `mcode acp` |
+| Team tools (`list_team`, `message_bot`, `dispatch_tasks`…) | Yes, but the CLI only loads MCP servers from `<dataDir>/mcp.json` — not from the ACP session | `src/host.mjs` publishes the plugin's live `/mcp/minimax-bot` URL there on every boot |
 | Model catalog for the Bot settings picker | **No** — `providers/list` is not implemented by the CLI at the pinned version | Written here: `src/models.mjs` reads an OpenAI-compatible `/models` endpoint |
 | Phone bridge (`/api/mobile/v1`) | **No** — no `api/mobile` route exists upstream | Written here: `src/mobile-bridge.mjs`, a third-party app protocol |
 | Page access token | **No** — upstream's token is the runner's own readiness token, not a page credential | Written here: `src/token.mjs` |
