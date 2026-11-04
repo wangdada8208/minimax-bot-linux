@@ -235,6 +235,7 @@ export function startMobileBridge(options) {
     readThrough: 0,
     preferences: { enabled: false, categories: [...NOTIFY_KINDS] },
     seenApprovals: [],
+    seenQuestions: [],
     chatLastTs: {},
     leases: {},
   };
@@ -247,6 +248,7 @@ export function startMobileBridge(options) {
       if (typeof saved.preferences?.enabled === 'boolean') notify.preferences.enabled = saved.preferences.enabled;
       if (Array.isArray(saved.preferences?.categories)) notify.preferences.categories = saved.preferences.categories.filter((kind) => NOTIFY_KINDS.includes(kind));
       if (Array.isArray(saved.seenApprovals)) notify.seenApprovals = saved.seenApprovals.filter((key) => typeof key === 'string').slice(-500);
+      if (Array.isArray(saved.seenQuestions)) notify.seenQuestions = saved.seenQuestions.filter((key) => typeof key === 'string').slice(-500);
       if (saved.chatLastTs && typeof saved.chatLastTs === 'object') notify.chatLastTs = saved.chatLastTs;
       if (saved.leases && typeof saved.leases === 'object') notify.leases = saved.leases;
     } catch {}
@@ -260,7 +262,7 @@ export function startMobileBridge(options) {
         mkdirSync(dirname(options.notifyStorePath), { recursive: true });
         writeFileSync(options.notifyStorePath, JSON.stringify({
           items: notify.items, cursor: notify.cursor, readThrough: notify.readThrough,
-          preferences: notify.preferences, seenApprovals: notify.seenApprovals,
+          preferences: notify.preferences, seenApprovals: notify.seenApprovals, seenQuestions: notify.seenQuestions,
           chatLastTs: notify.chatLastTs, leases: notify.leases,
         }));
       } catch {}
@@ -303,33 +305,65 @@ export function startMobileBridge(options) {
       fresh.push({ conversationId: notifyChat(item.chatId), kind: 'approval' });
     }
     notify.seenApprovals = [...seen].slice(-500);
+    const questions = new Set(notify.seenQuestions);
+    const busy = new Set(state.busyChats || []);
+    const taskStates = new Map((state.tasks || []).map(task => [task.id, task.status]));
     for (const [chatId, chat] of Object.entries(state.chats || {})) {
       const ts = Number(chat?.lastTs) || 0;
       if (!ts) continue;
       const known = notify.chatLastTs[chatId];
-      // The first observation only records a baseline; old history is not news.
-      if (known === undefined) { notify.chatLastTs[chatId] = ts; changed = true; continue; }
-      if (ts <= known) continue;
-      // Keep the old baseline while a turn is still running so the finished
-      // reply is announced exactly once.
-      if (chat?.pending) continue;
-      notify.chatLastTs[chatId] = ts;
-      changed = true;
-      if (chat?.lastRole && chat.lastRole !== 'bot') continue;
+      // The first observation only records a baseline; old replies are not news.
+      if (known === undefined) { notify.chatLastTs[chatId] = ts; changed = true; }
+      // Official chat.pending means an unanswered questionnaire, not running work.
+      // Forms can arrive without changing lastTs, including on the first sample.
+      if (!chat?.pending && (known === undefined || ts <= known)) continue;
+      // Keep the baseline while actual work runs, so its final reply is not lost.
+      if (busy.has(chatId)) continue;
       let page;
-      try { page = await api('GET', `/api/chats/${chatId}/messages?limit=3`); } catch { continue; }
-      const last = (page.messages || []).at(-1);
-      if (!last || last.role === 'user' || last.status === 'streaming') continue;
+      try { page = await api('GET', `/api/chats/${chatId}/messages?limit=${chat?.pending ? 500 : 3}`); } catch { continue; }
+      let messages = page.messages || [];
+      // An unanswered form may precede newer messages in a group conversation.
+      const cursors = new Set();
+      let historyComplete = true;
+      while (chat?.pending && page.hasMore && page.nextBefore && !cursors.has(page.nextBefore)) {
+        const before = page.nextBefore;
+        cursors.add(before);
+        try { page = await api('GET', `/api/chats/${chatId}/messages?limit=500&before=${encodeURIComponent(before)}`); }
+        catch { historyComplete = false; break; }
+        messages = [...(page.messages || []), ...messages];
+      }
+      let actionableQuestion = false;
+      for (const message of messages) {
+        if (!message.question || message.answered || message.role === 'user' || message.status === 'streaming') continue;
+        const taskState = message.taskId && taskStates.get(message.taskId);
+        if (taskState && taskState !== 'waiting_for_user') continue;
+        actionableQuestion = true;
+        const requestId = message.question.requestId || message.id;
+        if (!requestId) continue;
+        const key = JSON.stringify([chatId, requestId]);
+        if (questions.has(key)) continue;
+        questions.add(key);
+        changed = true;
+        fresh.push({ conversationId: notifyChat(chatId), kind: 'question', requestKey: key });
+      }
+      if (!historyComplete) continue;
+      if (notify.chatLastTs[chatId] !== ts) { notify.chatLastTs[chatId] = ts; changed = true; }
+      // Waiting for an answer is never a completed reply, even with prose text.
+      if (actionableQuestion) continue;
+      if (known === undefined || ts <= known) continue;
+      if (chat?.lastRole && chat.lastRole !== 'bot') continue;
+      const last = messages.at(-1);
+      if (!last || last.role === 'user' || last.status === 'streaming' || last.question || last.answered) continue;
       const text = messageText(last).trim();
       if (!text) continue;
       fresh.push({ conversationId: notifyChat(chatId), kind: /[?？]\s*$/.test(text) ? 'question' : 'reply' });
     }
-    // At most one event per conversation and kind per sample: a burst of
-    // messages must not turn into a burst of alerts.
+    notify.seenQuestions = [...questions].slice(-500);
+    // Coalesce reply bursts, but keep distinct questionnaire request lifecycles.
     const dedup = new Map();
     for (const event of fresh) {
       if (!event.conversationId) continue;
-      dedup.set(`${event.conversationId}|${event.kind}`, event);
+      dedup.set(event.requestKey || `${event.conversationId}|${event.kind}`, event);
     }
     for (const event of dedup.values()) { notifyAdd(event.conversationId, event.kind); changed = true; }
     if (changed) notifySave();
@@ -340,7 +374,8 @@ export function startMobileBridge(options) {
     sampleNotifications().catch(() => {}).finally(() => { notifyPending = false; });
   }, options.notifyIntervalMs || 5000);
   notifyPoll.unref?.();
-  sampleNotifications().catch(() => {});
+  notifyPending = true;
+  sampleNotifications().catch(() => {}).finally(() => { notifyPending = false; });
 
   async function teamState() {
     const [state, catalog] = await Promise.all([

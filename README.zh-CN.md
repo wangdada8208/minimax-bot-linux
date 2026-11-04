@@ -4,7 +4,7 @@
 
 在 Linux 服务器运行官方 MiniMax Bot，并从另一台电脑打开页面。页面、引擎、团队工具、群聊、记忆和定时任务直接使用未修改的 [MiniMax-Code-MiniApps 官方插件](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot)；CLI 和插件进程生命周期直接使用 [minimax-code 官方源码](https://github.com/MiniMax-AI/minimax-code)。两个官方仓库的源文件都不修改。
 
-本仓库只保留 Bot 与 ACP 之间必要的接口适配、远程 HTTP 访问，以及另行要求的手机协议和页面内宿主更新功能。官方 Runtime 直接构建、打包和调用，不再重写其实现。完整复用清单、锁定版本、源码哈希和兼容边界见 [UPSTREAM.md](UPSTREAM.md)。
+本仓库只保留 Bot 与官方原生 Runtime 之间必要的接口适配、远程 HTTP 访问，以及另行要求的手机协议和页面内宿主更新功能。官方 Runtime 直接构建、打包和调用，不再重写其实现。完整复用清单、锁定版本、源码哈希和兼容边界见 [UPSTREAM.md](UPSTREAM.md)。
 
 ## 环境要求
 
@@ -73,7 +73,11 @@ docker compose logs -f
 
 官方进程适配器负责物化运行载荷、预留端口、启动 IPC runner、就绪检测、端口冲突重试，以及关闭时确认进程退出。小型引导模块通过官方 `loadModule` 扩展点提供 `context.agent`：本次审计的公开 runner context 没有该成员，而 Bot 需要它。
 
-子进程中的官方 ACP 进程处理 Bot 会话。新建和恢复会话都按官方 ACP 契约携带团队 MCP 端点；模型和思考档位使用官方会话实际公布的选项；官方 ACP 表单问答映射到 Bot 页面。ACP 没传输的部分 Bot 问卷元数据不会凭空补造，具体限制见 [UPSTREAM.md](UPSTREAM.md)。
+子进程直接加载官方 `createTuiRuntime` 和原生会话 API，使用官方 MCP 会话配置和模型选项。问卷保留官方原始 ID、类型、正文、到期时间，并从官方存储恢复，重启后仍可提交答案并观察原生继续回合。每个 Bot 的模型选择只写该会话，不修改全局默认模型。
+
+可选 Browser Use 保持停用：通过官方自定义 Agent 的 `disallowedTools` 禁用 `request_feature_enable`，保留正常 `ask_user`。旧会话首次继续工作时迁移至该 Agent，旧记录保持不变，历史文本作为参考带入，不重放历史操作。已有正常问卷先在原会话处理；遗留 Browser Use 启用请求明确拒绝。长历史的携带范围见 [UPSTREAM.md](UPSTREAM.md)。手机通知也按结构化问卷识别“等待回答”，不再误判为仍在运行而隐藏。
+
+官方队列在任务等待回答时不会向主 Bot 发送完成报告，需在任务面板进入接收方回答；这条官方行为保持原样。
 
 锁定 Runtime 的清单校验器早于 Bot 的 `agentAccess` 和 `surface.window` 字段。适配层只在内存校验视图里处理这两个字段，并提供声明的 Agent 能力；原清单和运行载荷字节不变。它不等于完整桌面宿主。
 

@@ -35,12 +35,13 @@ Official paths below are relative to the pinned `minimax-code` checkout.
 | Frozen context, realpath containment, named start validation, abort/dispose, runner IPC | Official `startMiniAppModule` and `runMiniAppHostRunner` from the adjacent `host-runner.ts` |
 | Port ownership | Official `HostMiniAppPortRegistry` from the adjacent `port-registry.ts` |
 | Runtime payload materialization and candidate verification | Official `WorkspaceMiniAppStorage`, package readers/digests and MiniApp candidate helpers under `service/plugin-system/plugin/` |
-| Agent execution, tools, storage, providers and model controls | The unmodified official CLI build, running its ACP entry point |
-| ACP transport | Official `@agentclientprotocol/sdk`; `src/acp.mjs` adapts Node streams and callbacks |
-| Team MCP connection | Official ACP `session/new` and `session/resume` MCP overlays, followed by official MCP discovery and invocation |
+| Agent execution, tools, storage, providers and model controls | The unmodified official `createTuiRuntime` and `TuiRuntimeAdapter`, bundled from the pinned checkout using the official CLI build profile and resources |
+| Session transport | Direct official native APIs; no ACP form conversion in the default deployment |
+| Team MCP connection | Official `configureSessionMcpServers`, followed by official MCP discovery and invocation; alias `minimax_bot` also works as a JavaScript identifier in `run_code` |
 | Model discovery and persistence | Official `McodeProviderApplication.refreshModels` via `scripts/refresh-models.mjs`; this invokes its existing Runtime APIs |
-| Model and reasoning selection | The official session's advertised `configOptions`; local mapping translates them to the Bot's picker contract |
-| Questionnaire execution | Official ACP form elicitation; the local bridge maps forms and answers to the Bot contract |
+| Model and reasoning selection | Official `listModels` and `selectSessionModel`; a Bot turn does not change the global default |
+| Questionnaire execution | Official persisted native requests, `getPendingQuestionnaire`, `replyQuestionnaire` and `watchSessionTurn`; original identity, mode, payload and expiry preserved |
+| Optional browser policy | Official Custom Agent canonical configuration denies `request_feature_enable`, preserving `ask_user`; builtin files remain unchanged |
 
 `src/official-host.mjs` is now glue calling the official process adapter, not a
 rewrite of its lifecycle. `src/official-runner.mjs` uses the official runner's
@@ -53,7 +54,7 @@ policy instead of supplying an independently rewritten free-port algorithm.
 1. **Agent context.** The audited public `MiniAppStartContext` has no `agent`
    member; the Bot consumes one. Its API declarations in MiniApps are types, not
    an implementation. A small adapter supplies `run`, `answer`, `reply` and
-   `models` through the official ACP contract. This finding is limited to the
+   `models` through the official native Runtime APIs. This finding is limited to the
    pinned source trees; it does not prove any desktop code is closed source.
 2. **Manifest generations.** The pinned Runtime reader rejects the Bot's
    `agentAccess` and `surface.window` additions. The bridge validates the supported
@@ -72,9 +73,8 @@ policy instead of supplying an independently rewritten free-port algorithm.
 
 The multi-generation plugin publication supervisor remains available in the
 upstream source. This deployment starts one pinned Bot process using the official
-process adapter and attaches its MCP endpoint using the official ACP session
-contract. It does not instantiate a second complete plugin manager alongside the
-one already owned by the CLI.
+process adapter and attaches its MCP endpoint using the official native session
+API. The embedded official Runtime owns its normal plugin manager.
 
 ## Corrections to earlier documentation
 
@@ -94,9 +94,34 @@ officially advertised value; refresh new provider models using the official
 application before starting/restarting the service. Endpoint rows that are not
 configured are explicitly labelled rather than silently given invented settings.
 
-ACP elicitation does not transmit every Bot-specific questionnaire property
-(original correlation IDs, original mode/payload and expiry). The bridge uses a
-local correlation ID for forms; it does not invent omitted runtime metadata.
+The former ACP bridge lost original questionnaire IDs, modes, payload and expiry,
+and kept answer continuations only in memory. It is no longer the default.
+`src/native-agent.mjs` consumes official persisted requests and observes official
+continuation turn IDs, including after Runtime restart. The `acp` backend remains
+an explicit diagnostic option with those limitations.
+
+Builtin Agent sessions retain their original tool policy. When future work first
+uses the managed Custom Agent, the adapter creates an official new session,
+retains the original session unchanged and carries transcript text as historical
+reference; prior tools are not replayed. The latest official standing-context block
+is restored as current Bot identity, including `caller_bot_id`, so dispatched tasks
+remain linked to the caller for automatic result delivery. Up to 1,000 messages are read; histories
+over 200,000 characters use the first message and latest 40 messages. Existing
+genuine questionnaires remain on their original session until answered. A legacy
+pending Browser Use enable request is explicitly declined during migration;
+Browser Use remains disabled. Real tool permissions and user questions remain.
+
+The official dispatcher keeps `waiting_for_user` batches open until answered;
+only then can it relay completion and wake the caller. Do not replace this with
+an invented successful result. Phone notifications now consume structured
+questionnaire metadata rather than treating `chat.pending` as a running turn.
+
+The native build produces `dist/bot-native.mjs` beside the official CLI. It reuses
+the official module-location profile, build flags, dependency externals and the
+existing official Worker/WASM/resource closure. Source loading alone is insufficient:
+`run_code` needs the built QuickJS Worker beside the stable CLI entry. Native
+provenance records 5,842 input hashes and the official artifact closure in
+`src/vendor/official-native.provenance.json`; no worker path is patched.
 
 ## Rebuild and updates
 

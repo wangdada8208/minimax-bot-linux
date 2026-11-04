@@ -11,14 +11,29 @@ jobs:
     strategy:
       matrix:
         node: [22, 24]
+    env:
+      MINIMAX_RUNTIME_DIR: ${{ github.workspace }}/.upstream/runtime
+      MINIMAX_BOT_PLUGIN: ${{ github.workspace }}/.upstream/miniapps/plugins/minimax-ai/minimax-bot
+      MINIMAX_DATA_DIR: ${{ runner.temp }}/minimax-runtime-test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci || npm install
+      - run: npm ci
+      - name: Fetch pinned official sources
+        run: |
+          git clone --filter=blob:none https://github.com/MiniMax-AI/minimax-code.git .upstream/runtime
+          git -C .upstream/runtime checkout --detach "$(node -p "require('./upstream.lock.json').runtime.commit")"
+          git clone --filter=blob:none https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git .upstream/miniapps
+          git -C .upstream/miniapps checkout --detach "$(node -p "require('./upstream.lock.json').plugin.commit")"
+      - name: Install official source dependencies
+        working-directory: .upstream/runtime
+        run: |
+          npm exec --yes --package "$(node -p "require('./package.json').packageManager")" -- pnpm install --frozen-lockfile
+          npm exec --yes --package "$(node -p "require('./package.json').packageManager")" -- pnpm build
+      - run: npm run build:official
       - run: npm test
-      - run: node --check src/host.mjs
-      - run: node --check src/agent.mjs
-      - run: bash -n scripts/install.sh scripts/update-upstream.sh scripts/watchdog.sh
+      - run: node --check src/host.mjs && node --check src/native-agent.mjs
+      - run: bash -n scripts/install.sh scripts/update-upstream.sh scripts/watchdog.sh scripts/self-update.sh

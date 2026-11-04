@@ -1,7 +1,7 @@
 // Bundle the pinned official sources without patching or substituting their implementation.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -35,6 +35,24 @@ const exports = [
   ['packages/local-runtime-v2/src/service/plugin-system/mcp/config.ts', ['readOfficialMcpFile']],
   ['packages/tui/src/acp/control-state.ts', ['parseModelConfigValue', 'modelConfigValue']],
 ];
+// The native Runtime must live beside the official CLI's worker and resource tree.
+// Fail before producing bundles when the installer has not built the official CLI.
+const nativeOutfile = path.join(officialRoot, 'dist/bot-native.mjs');
+const requiredOfficialAssets = [
+  ['cli.js', 'file'], ['quickjs-worker.js', 'file'], ['image-preview-worker.js', 'file'], ['emscripten-module.wasm', 'file'],
+  ['photon_rs_bg.wasm', 'file'], ['configs', 'directory'], ['native', 'directory'],
+  ['assets', 'directory'], ['assets/agents', 'directory'],
+  ['assets/models-dev-catalog.json.gz', 'file'], ['chunks', 'directory'],
+  ['vendor', 'directory'], ['internal-bin', 'directory'],
+  ['mcode-tools.js', 'file'], ['matrix-mcp-stdio.js', 'file'],
+];
+for (const [file, kind] of requiredOfficialAssets) {
+  const location = path.join(officialRoot, 'dist', file);
+  const info = await stat(location).catch(() => undefined);
+  if (!info || (kind === 'file' ? !info.isFile() || info.size === 0 : !info.isDirectory() || !(await readdir(location)).length)) {
+    throw new Error(`Missing mandatory official build asset dist/${file}; run the official build before npm run build:official.`);
+  }
+}
 const outputDir = path.join(projectRoot, 'src/vendor');
 await mkdir(outputDir, { recursive: true });
 const outfile = path.join(outputDir, 'official-miniapp.mjs');
@@ -79,3 +97,71 @@ await writeFile(path.join(outputDir, 'official-miniapp.provenance.json'), JSON.s
 }, null, 2) + '\n');
 await writeFile(path.join(outputDir, 'official-miniapp.LICENSE'), await readFile(path.join(officialRoot, 'LICENSE')));
 console.log(`Bundled ${inputs.length} unchanged source inputs into ${path.relative(projectRoot, outfile)}`);
+
+const { createTuiBundleModuleLocationConfig } = await import(pathToFileURL(path.join(officialRoot, 'scripts/lib/tui-npm-bundle-profile.mjs')).href);
+const { cliExternalModules, cliBuildVersion } = await import(pathToFileURL(path.join(officialRoot, 'scripts/lib/cli-release.mjs')).href);
+const moduleLocation = createTuiBundleModuleLocationConfig();
+const nativeExports = [
+  ['packages/tui/src/runtime/lifecycle.ts', ['createTuiRuntime', 'shutdownTuiRuntime']],
+  ['packages/tui/src/runtime/data-dir.ts', ['prepareTuiDataDir']],
+  ['packages/local-runtime-v2/src/service/agent/storage/agent-files.ts', ['AgentFiles']],
+  ['packages/local-runtime-v2/src/service/agent/storage/canonical-agent-config.ts', ['readBuiltinCanonicalAgentConfig', 'serializeCanonicalAgentConfig']],
+];
+const nativeEntry = nativeExports.map(([file, names]) => `export { ${names.join(', ')} } from ${JSON.stringify(path.join(officialRoot, file))};`).join('\n');
+const nativeFlags = {
+  bundle: true, platform: 'node', target: 'node22', format: 'esm',
+  external: cliExternalModules, legalComments: 'eof',
+  minifyIdentifiers: true, minifyWhitespace: true,
+  define: {
+    ...moduleLocation.define,
+    __CLI_VERSION__: JSON.stringify(cliBuildVersion(officialRoot)),
+    __CLI_CHANNEL__: '"source"', __IS_NPM_BUILD__: 'true',
+    __BUILD_PROFILE__: '"tui"', __TUI_BUILD_ENV__: '"prod"',
+    __TUI_BUILD_VARIANT__: '"standard"', __TUI_NPM_DIST_TAG__: '"latest"',
+  },
+};
+const nativeResult = await build({
+  ...nativeFlags,
+  stdin: { contents: nativeEntry, resolveDir: officialRoot, sourcefile: 'official-native-entry.mjs' },
+  absWorkingDir: officialRoot, outfile: nativeOutfile,
+  alias: aliases, metafile: true,
+  banner: { js: moduleLocation.banner },
+});
+const nativeInputs = [];
+// The complete Runtime has thousands of inputs; bound file descriptors while hashing.
+for (const [file, metadata] of Object.entries(nativeResult.metafile.inputs).sort(([a], [b]) => a.localeCompare(b))) {
+  nativeInputs.push({
+    path: file, ...metadata,
+    sha256: sha256(file === 'official-native-entry.mjs' ? nativeEntry : await readFile(path.resolve(officialRoot, file))),
+  });
+}
+// Record the existing artifact closure as well: worker chunks and wasm are supplied
+// by the official build, never copied from or rewritten in official source trees.
+async function hashOfficialAsset(relativePath) {
+  const absolutePath = path.join(officialRoot, relativePath);
+  const info = await stat(absolutePath);
+  if (info.isDirectory()) {
+    const children = (await readdir(absolutePath)).sort();
+    const hashes = [];
+    for (const file of children) hashes.push(...await hashOfficialAsset(`${relativePath}/${file}`));
+    return hashes;
+  }
+  return [{ path: relativePath, sha256: sha256(await readFile(absolutePath)) }];
+}
+const officialAssets = [...new Map((await Promise.all(requiredOfficialAssets.map(([file]) => hashOfficialAsset(`dist/${file}`)))).flat().map((asset) => [asset.path, asset])).values()].sort((a, b) => a.path.localeCompare(b.path));
+const buildSources = await Promise.all([
+  'scripts/build.mjs', 'scripts/lib/tui-npm-bundle-profile.mjs',
+  'scripts/lib/cli-release.mjs', 'scripts/lib/package-exports.mjs', 'release/extraction.json',
+].map(async (file) => ({ path: file, sha256: sha256(await readFile(path.join(officialRoot, file))) })));
+await writeFile(path.join(outputDir, 'official-native.LICENSE'), await readFile(path.join(officialRoot, 'LICENSE')));
+await writeFile(path.join(outputDir, 'official-native.provenance.json'), JSON.stringify({
+  repository: 'https://github.com/MiniMax-AI/minimax-code', revision,
+  generatedBy: 'node scripts/build-official.mjs', esbuildVersion,
+  generatorSha256: sha256(await readFile(fileURLToPath(import.meta.url))),
+  sourcePolicy: 'All input sources bundled unchanged; no patches, source replacements, or lifecycle reimplementations. Official build supplies workers and runtime assets.',
+  bundle: { path: path.relative(officialRoot, nativeOutfile).split(path.sep).join('/'), relativeTo: 'runtimeDir', sha256: sha256(await readFile(nativeOutfile)) },
+  build: { ...nativeFlags, alias: aliases, banner: moduleLocation.banner, entry: nativeEntry },
+  buildSources, inputs: nativeInputs, officialAssets,
+  outputs: nativeResult.metafile.outputs,
+}, null, 2) + '\n');
+console.log(`Bundled ${nativeInputs.length} unchanged native Runtime inputs into ${nativeOutfile}`);

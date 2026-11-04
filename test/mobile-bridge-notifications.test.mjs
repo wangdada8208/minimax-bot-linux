@@ -29,7 +29,7 @@ async function fixture(t, options = {}) {
       const messages = history[chat[1]] || [];
       const end = url.searchParams.has('before') ? messages.findIndex((m) => m.id === url.searchParams.get('before')) : messages.length;
       const start = Math.max(0, end - Number(url.searchParams.get('limit') || 40));
-      return send({ messages: messages.slice(start, end), hasMore: start > 0 });
+      return send({ messages: messages.slice(start, end), hasMore: start > 0, nextBefore: start > 0 ? messages[start].id : null });
     }
     return send({ error: 'not_found', message: 'unknown route' }, 404);
   });
@@ -98,6 +98,99 @@ test('streaming replies and user messages never notify', async (t) => {
   f.state.chats['bot:bot_a'].lastTs = 50;
   await new Promise((resolve) => setTimeout(resolve, 120));
   assert.deepEqual((await f.inbox()).items, []);
+});
+
+test('cancelled task forms are not actionable and cannot hide later completed replies', async (t) => {
+  const f = await fixture(t);
+  await new Promise(resolve => setTimeout(resolve, 80));
+  f.state.tasks = [{ id: 'task_cancelled', status: 'cancelled' }];
+  f.state.chats['bot:bot_a'] = { lastTs: 11, lastRole: 'bot', pending: true };
+  f.history['bot:bot_a'].push({ id: 'old_question', role: 'bot', taskId: 'task_cancelled', status: 'done', text: '', question: { requestId: 'q_cancelled', request: { steps: [] } } });
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal((await f.inbox()).items.length, 0);
+  f.history['bot:bot_a'].push({ id: 'new_reply', role: 'bot', status: 'done', text: 'Actual new result' });
+  f.state.chats['bot:bot_a'].lastTs = 12;
+  await waitFor(async () => (await f.inbox()).items.length === 1);
+  assert.equal((await f.inbox()).items[0].kind, 'reply');
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal((await f.inbox()).items.length, 1);
+});
+
+test('pending questionnaires notify once by request ID and never masquerade as completion', async (t) => {
+  const f = await fixture(t);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const question = { requestId: 'question_1', mode: 'questionnaire', request: { steps: [{ id: 'choice', question: 'Choose a direction', options: [] }] } };
+  f.history['bot:bot_a'].push({ id: 'msg_form', role: 'bot', status: 'done', text: 'Please choose a direction.', question });
+  f.state.chats['bot:bot_a'] = { lastTs: 20, lastRole: 'bot', pending: true };
+  const first = await waitFor(async () => { const value = await f.inbox(); return value.items.length ? value : null; });
+  assert.deepEqual(first.items.map(({ conversationId, kind }) => [conversationId, kind]), [['bot_a', 'question']]);
+
+  // Re-polling, summary timestamp changes and a reprojected message are one lifecycle.
+  f.history['bot:bot_a'].push({ id: 'msg_form_copy', role: 'bot', text: 'Pick a direction.', question: structuredClone(question) });
+  f.state.chats['bot:bot_a'].lastTs = 30;
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal((await f.inbox()).cursor, first.cursor);
+
+  // Resolving a form does not turn the same waiting message into a finished reply.
+  for (const message of f.history['bot:bot_a'].slice(1)) { delete message.question; message.answered = true; }
+  f.state.chats['bot:bot_a'] = { lastTs: 40, lastRole: 'bot', pending: false };
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal((await f.inbox()).cursor, first.cursor);
+
+  // A new request in this conversation has its own lifecycle, then a normal reply follows.
+  f.history['bot:bot_a'].push({ id: 'msg_next_form', role: 'bot', text: '', question: { ...question, requestId: 'question_2' } });
+  f.state.chats['bot:bot_a'] = { lastTs: 50, lastRole: 'bot', pending: true };
+  await waitFor(async () => (await f.inbox()).cursor === 2);
+  delete f.history['bot:bot_a'].at(-1).question;
+  f.history['bot:bot_a'].at(-1).answered = true;
+  f.history['bot:bot_a'].push({ id: 'msg_done', role: 'bot', text: 'The task is complete.' });
+  f.state.chats['bot:bot_a'] = { lastTs: 60, lastRole: 'bot', pending: false };
+  const completed = await waitFor(async () => { const value = await f.inbox(); return value.cursor === 3 ? value : null; });
+  assert.deepEqual(completed.items.map((item) => item.kind), ['reply', 'question', 'question']);
+});
+
+test('empty questionnaire metadata at the same timestamp waits for actual running work', async (t) => {
+  const f = await fixture(t);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  f.state.busyChats = ['bot:bot_a'];
+  f.history['bot:bot_a'].push({ id: 'empty_form', role: 'bot', status: 'streaming', text: '', parts: [{ type: 'text', text: '' }] });
+  f.state.chats['bot:bot_a'] = { lastTs: 20, lastRole: 'bot', pending: false };
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  Object.assign(f.history['bot:bot_a'].at(-1), { status: 'done', question: { requestId: 'empty_question', mode: 'questionnaire', request: { steps: [{ id: 'form', question: 'Choose', options: [] }] } } });
+  f.state.chats['bot:bot_a'].pending = true;
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual((await f.inbox()).items, []);
+  f.state.busyChats = [];
+  const item = await waitFor(async () => (await f.inbox()).items[0]);
+  assert.equal(item.kind, 'question');
+  assert.equal(item.conversationId, 'bot_a');
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal((await f.inbox()).cursor, 1);
+});
+
+test('a pending form arriving at the baseline timestamp is still actionable', async (t) => {
+  const f = await fixture(t);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  f.history['bot:bot_a'].at(-1).question = { requestId: 'same_ts', request: { steps: [] } };
+  f.history['bot:bot_a'].at(-1).text = '';
+  f.state.chats['bot:bot_a'].pending = true;
+  const item = await waitFor(async () => (await f.inbox()).items[0]);
+  assert.deepEqual([item.conversationId, item.kind], ['bot_a', 'question']);
+});
+
+test('pending forms before newer messages retain distinct request lifecycles and the room link', async (t) => {
+  const f = await fixture(t);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  f.state.groups.push({ id: 'grp_a', name: 'Room' });
+  f.history['group:grp_a'] = [
+    ...['first', 'second'].map((requestId) => ({ id: `form_${requestId}`, role: 'bot', text: '', question: { requestId, request: { steps: [] } } })),
+    ...Array.from({ length: 501 }, (_, index) => ({ id: `later_${index}`, role: 'user', text: 'later message' })),
+  ];
+  f.state.chats['group:grp_a'] = { lastTs: 20, lastRole: 'user', pending: true };
+  const value = await waitFor(async () => { const inbox = await f.inbox(); return inbox.cursor === 2 ? inbox : null; });
+  assert.deepEqual(value.items.map(({ conversationId, kind }) => [conversationId, kind]), [['grp_a', 'question'], ['grp_a', 'question']]);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal((await f.inbox()).cursor, 2);
 });
 
 test('preferences and read state round-trip with validation', async (t) => {
@@ -179,26 +272,35 @@ test('the inbox survives a bridge restart', async (t) => {
   const first = await fixture(t, { notifyStorePath: store });
   await new Promise((resolve) => setTimeout(resolve, 80));
   first.state.approvals = [{ requestId: 'req_1', chatId: 'bot:bot_a' }];
-  const before = await waitFor(async () => { const value = await first.inbox(); return value.items.length ? value : null; });
+  const question = { requestId: 'persisted_question', mode: 'questionnaire', request: { steps: [] } };
+  first.history['bot:bot_a'].push({ id: 'persisted_form', role: 'bot', text: '', question });
+  first.state.chats['bot:bot_a'] = { lastTs: 20, lastRole: 'bot', pending: true };
+  const before = await waitFor(async () => { const value = await first.inbox(); return value.items.length === 2 ? value : null; });
   await new Promise((resolve) => setTimeout(resolve, 400));
   const second = await fixture(t, { notifyStorePath: store });
   const after = await waitFor(async () => { const value = await second.inbox(); return value.items.length ? value : null; });
   assert.deepEqual(after.items, before.items);
   assert.equal(after.cursor, before.cursor);
-  // The approval already recorded is not announced twice.
+  // Reappearing approvals and active forms retain their lifecycle dedupe on restart.
+  second.state.approvals = [{ requestId: 'req_1', chatId: 'bot:bot_a' }];
+  second.history['bot:bot_a'].push({ id: 'restored_form', role: 'bot', text: '', question });
+  second.state.chats['bot:bot_a'] = { lastTs: 30, lastRole: 'bot', pending: true };
   await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.equal((await second.inbox()).items.length, 1);
+  assert.equal((await second.inbox()).items.length, 2);
 });
 
 test('a running turn waits for its final answer and user messages stay silent', async (t) => {
   const f = await fixture(t);
   await new Promise((resolve) => setTimeout(resolve, 80));
   f.history['bot:bot_a'].push({ id: 'msg_8', role: 'bot', seq: 8, text: 'working' });
-  f.state.chats['bot:bot_a'] = { lastTs: 80, lastRole: 'bot', pending: true };
+  f.state.chats['bot:bot_a'] = { lastTs: 80, lastRole: 'bot', pending: false };
+  f.state.busyChats = ['bot:bot_a'];
   await new Promise((resolve) => setTimeout(resolve, 120));
   assert.deepEqual((await f.inbox()).items, []);
 
-  f.state.chats['bot:bot_a'] = { lastTs: 90, lastRole: 'bot', pending: false };
+  f.state.busyChats = [];
+  // Completion can update the message in place without a new timestamp.
+  f.history['bot:bot_a'].at(-1).text = 'finished';
   const items = await waitFor(async () => { const value = await f.inbox(); return value.items.length ? value.items : null; });
   assert.deepEqual(items.map((item) => item.kind), ['reply']);
 

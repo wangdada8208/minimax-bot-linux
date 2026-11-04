@@ -37,6 +37,7 @@ test('the host boots and serves the Bot page', { skip: !pluginRoot && 'MINIMAX_B
       MINIMAX_BOT_HOST: '127.0.0.1',
       MINIMAX_BOT_PORT: String(port),
       MINIMAX_BOT_DATA: dataDir,
+      MINIMAX_DATA_DIR: join(dataDir, 'runtime'),
       MINIMAX_BOT_CWD: dataDir,
       MINIMAX_BOT_PLUGIN: pluginRoot,
       MINIMAX_BOT_TOKEN: token,

@@ -13,6 +13,8 @@
     "sourcePolicy": "Build official CLI and bundle official sources unchanged",
     "bundle": "src/vendor/official-miniapp.mjs",
     "provenance": "src/vendor/official-miniapp.provenance.json",
+    "nativeBundle": "dist/bot-native.mjs",
+    "nativeProvenance": "src/vendor/official-native.provenance.json",
     "checkedAt": "2026-11-04"
   }
 }

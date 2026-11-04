@@ -9,7 +9,7 @@ The CLI and process lifecycle come directly from
 [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code).
 Both upstream source trees remain unmodified.
 
-This repository supplies the necessary Bot-to-ACP compatibility bridge, remote
+This repository supplies the necessary Bot-to-native-Runtime compatibility bridge, remote
 HTTP access, and the separately requested phone protocol and in-page host updater.
 The official runtime is built/bundled, not reimplemented. See
 [UPSTREAM.md](UPSTREAM.md) for the complete implementation inventory, exact pins,
@@ -104,12 +104,23 @@ proves process termination on shutdown. A small bootstrap supplies `context.agen
 through the runner's supported `loadModule` seam; this Agent interface is absent
 from the audited public runner context but required by the Bot.
 
-One official ACP process handles Bot sessions inside that child. Team MCP tools
-are supplied on both session creation and resume using the official ACP contract.
-The model picker and reasoning effort use the official session's advertised
-controls. ACP form elicitation is mapped to the official Bot questionnaire UI.
-Some Bot-specific questionnaire metadata is not present on the ACP wire; details
-are recorded in [UPSTREAM.md](UPSTREAM.md).
+The child directly loads official `createTuiRuntime` and native session APIs.
+MCP configuration and per-session model selection use official controls without
+changing the global model preference. Native questionnaires retain original IDs,
+mode, payload and expiry; their persisted requests and official continuation turns
+can be recovered after Runtime restart.
+
+An official Custom Agent disables optional `request_feature_enable` while keeping
+normal `ask_user` available. Future work in legacy builtin sessions migrates to
+that Agent, preserving the original session and bringing transcript text as
+historical reference, without replaying old actions. Genuine pending questions
+remain on their original sessions; a legacy Browser Use enable request is declined.
+History bounds are recorded in [UPSTREAM.md](UPSTREAM.md). Phone notifications now
+recognize structured waiting questionnaires instead of suppressing them as busy.
+
+The official dispatcher intentionally keeps a batch open while a child waits for
+an answer. Open the child from Tasks → Waiting to answer; this host preserves that
+completion policy.
 
 The pinned Runtime manifest reader predates the Bot's `agentAccess` and
 `surface.window` fields. The compatibility bridge projects those fields out of

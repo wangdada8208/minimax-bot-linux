@@ -79,6 +79,8 @@ export async function startOfficialBotRuntime(options) {
   // seam adds only our ACP bridge configuration; no lifecycle protocol changes.
   const bridgeEnv = {
     MINIMAX_BOT_CWD: path.resolve(options.cwd ?? sourceEnv.MINIMAX_BOT_CWD ?? process.cwd()),
+    MINIMAX_BOT_AGENT_BACKEND: options.agentBackend ?? sourceEnv.MINIMAX_BOT_AGENT_BACKEND ?? 'acp',
+    MINIMAX_RUNTIME_DIR: path.resolve(options.officialRoot ?? sourceEnv.MINIMAX_RUNTIME_DIR ?? path.join(path.dirname(fileURLToPath(import.meta.url)), '../../minimax-code-official')),
     MINIMAX_BOT_MCODE: options.mcode ?? sourceEnv.MINIMAX_BOT_MCODE ?? 'mcode',
     MINIMAX_BOT_NODE: options.node ?? sourceEnv.MINIMAX_BOT_NODE ?? process.execPath,
     MINIMAX_BOT_MODELS_URL: options.modelsUrl ?? sourceEnv.MINIMAX_BOT_MODELS_URL ?? '',

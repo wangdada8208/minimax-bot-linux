@@ -58,6 +58,7 @@ const portRegistry = new HostMiniAppPortRegistry(new Set([options.port]));
 const startupOwner = setInterval(() => {}, 1000);
 const lifecycle = await startOfficialBotRuntime({
   ...options,
+  agentBackend: process.env.MINIMAX_BOT_AGENT_BACKEND ?? 'native',
   portRegistry,
   logger: {
     debug: () => {},
