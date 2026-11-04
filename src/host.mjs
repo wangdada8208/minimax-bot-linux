@@ -23,8 +23,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createGzip } from 'node:zlib';
-import { AcpAgent } from './agent.mjs';
-import { HostMiniAppPortRegistry, startMiniAppModule } from './official-host.mjs';
+import { HostMiniAppPortRegistry, startOfficialBotRuntime } from './official-host.mjs';
 import { SelfUpdate } from './self-update.mjs';
 import { startMobileBridge } from './mobile-bridge.mjs';
 import { newToken, presentedToken, tokenMatches } from './token.mjs';
@@ -37,7 +36,7 @@ const options = {
   dataDir: resolve(process.env.MINIMAX_BOT_DATA ?? join(homedir(), '.minimax-bot')),
   host: process.env.MINIMAX_BOT_HOST ?? '127.0.0.1',
   port: Number(process.env.MINIMAX_BOT_PORT ?? 8787),
-  mcode: process.env.MINIMAX_BOT_MCODE ?? 'mcode',
+  mcode: process.env.MINIMAX_BOT_MCODE ?? join(process.env.MINIMAX_RUNTIME_DIR ?? join(root, '../minimax-code-official'), 'dist/cli.js'),
   node: process.env.MINIMAX_BOT_NODE ?? process.execPath,
   cwd: resolve(process.env.MINIMAX_BOT_CWD ?? process.cwd()),
   modelsUrl: process.env.MINIMAX_BOT_MODELS_URL ?? '',
@@ -49,79 +48,28 @@ mkdirSync(options.dataDir, { recursive: true });
 const token = process.env.MINIMAX_BOT_TOKEN || readToken(tokenPath);
 if (!process.env.MINIMAX_BOT_TOKEN) writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
 
-const appPort = await freePort();
-const mobilePort = await freePort();
-const mcodeTarget = resolve(options.mcode);
-const acp = new AcpAgent({
-  command: mcodeTarget.endsWith('.js') ? options.node : options.mcode,
-  args: mcodeTarget.endsWith('.js') ? [mcodeTarget, 'acp'] : ['acp'],
-  cwd: options.cwd,
-  modelsUrl: options.modelsUrl,
-  modelsApiKey: options.modelsApiKey,
-  logger: {
-    info: (message, fields) => console.error(`[bot] ${message}${fields?.text ? ` ${fields.text}` : ''}`),
-    warn: (message) => console.error(`[bot] warn ${message}`),
-    error: (message) => console.error(`[bot] error ${message}`),
-  },
-});
-const agent = {
-  run: (input, runOptions) => acp.run(input, runOptions),
-  answer: (input, runOptions) => acp.answer(input, runOptions),
-  reply: (input) => acp.reply(input),
-  models: () => acp.loadModels(),
-};
-
-// Official port authority: the plugin reserves its loopback port there, so the
-// mobile bridge must stay off it.
-const portRegistry = new HostMiniAppPortRegistry();
-// Lifecycle comes from the official runner (see src/official-host.mjs); only
-// the Agent is ours, because the open-source runtime does not define one.
-const lifecycle = await startMiniAppModule({
-  registry: portRegistry,
-  pluginId: 'minimax-bot',
-  processGeneration: `gen_${Date.now().toString(36)}`,
-  packageRoot: options.pluginRoot,
-  nodeEntry: 'miniapp/node/server.mjs',
-  dataDir: options.dataDir,
-  listen: { host: '127.0.0.1', port: appPort },
+// The unmodified official process adapter owns port selection/reservations,
+// child startup, readiness, retries, materialization and termination. The child
+// runs the official host runner with a small context.agent compatibility bridge.
+const portRegistry = new HostMiniAppPortRegistry(new Set([options.port]));
+// The embedded official adapter unrefs cleanup/retry timers because its normal
+// owner is an already-running application. Keep this standalone host alive until
+// its HTTP listener takes over that ownership.
+const startupOwner = setInterval(() => {}, 1000);
+const lifecycle = await startOfficialBotRuntime({
+  ...options,
+  portRegistry,
   logger: {
     debug: () => {},
     info: (message) => console.error(`[minimax-bot] ${message}`),
     warn: (message) => console.error(`[minimax-bot] warn ${message}`),
     error: (message) => console.error(`[minimax-bot] error ${message}`),
   },
-  agent,
-});
+}).catch((error) => { clearInterval(startupOwner); throw error; });
 const pluginPort = lifecycle.port;
-// The plugin serves its team tools (list_team, message_bot, dispatch_tasks…) as
-// an HTTP MCP endpoint. Bots can only use them once the ACP session is handed
-// this URL, so give it to the Agent as soon as the real port is known; ACP
-// starts lazily on the first turn.
-acp.mcpUrl = `http://127.0.0.1:${pluginPort}/mcp/minimax-bot`;
-// The CLI reads MCP servers from <dataDir>/mcp.json, which is /data/.minimax for
-// this machine. The plugin listens on a port chosen at start, so publish it
-// there on every boot and let the official MCP runtime connect to it.
-try {
-  const mcpConfigPath = join(homedir(), '.minimax', 'mcp.json');
-  let existing = {};
-  try {
-    existing = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
-  } catch {
-    existing = {};
-  }
-  const servers = { ...(existing?.mcpServers ?? {}) };
-  servers['minimax-bot'] = {
-    type: 'http',
-    url: `http://127.0.0.1:${pluginPort}/mcp/minimax-bot`,
-  };
-  mkdirSync(dirname(mcpConfigPath), { recursive: true });
-  writeFileSync(mcpConfigPath, `${JSON.stringify({ ...existing, mcpServers: servers }, null, 2)}\n`, { mode: 0o600 });
-  console.error(`[bot] mcp.published ${mcpConfigPath}`);
-} catch (error) {
-  console.error(`[bot] warn mcp.publish_failed ${error?.message ?? 'unknown'}`);
-}
-// The phone bridge talks HTTP to the plugin and keeps its own listener.
-const mobile = await startMobileBridge({ host: '127.0.0.1', port: mobilePort, token });
+// options.port is the bridge's upstream, not its own listener. The bridge
+// allocates its listener separately; it must forward to the actual plugin.
+const mobile = await startMobileBridge({ host: '127.0.0.1', port: pluginPort, token });
 const selfUpdate = new SelfUpdate({
   root,
   logger: { warn: (message) => console.error(`[bot] warn ${message}`) },
@@ -273,7 +221,16 @@ guard.requestTimeout = 0;
 guard.keepAliveTimeout = 65_000;
 guard.headersTimeout = 66_000;
 
-await new Promise((resolve) => guard.listen(options.port, options.host, resolve));
+await new Promise((resolve, reject) => {
+  guard.once('error', reject);
+  guard.listen(options.port, options.host, resolve);
+}).catch(async (error) => {
+  clearInterval(startupOwner);
+  mobile.close();
+  await lifecycle.stop();
+  throw error;
+});
+clearInterval(startupOwner);
 const address = guard.address();
 const published = typeof address === 'object' && address ? address.port : options.port;
 console.log('MiniMax Bot is ready.');
@@ -288,10 +245,21 @@ const stop = async () => {
   mobile.close();
   appAgent.destroy();
   mobileAgent.destroy();
-  await acp.dispose();
-  await lifecycle?.stop?.();
-  guard.close();
+  try {
+    const result = await lifecycle.stop();
+    if (!result.proven) throw new Error('Official runtime could not prove its process stopped');
+  } finally {
+    guard.close();
+    guard.closeAllConnections();
+  }
 };
+// The watchdog watches the guard port. Exit when the official plugin child dies
+// so it can restart the whole host instead of leaving a healthy-looking 502 proxy.
+lifecycle.closed.then((exit) => {
+  if (stopping) return;
+  console.error(`[bot] runtime.exited code=${exit.code} signal=${exit.signal}`);
+  void stop().finally(() => process.exit(1));
+});
 process.on('SIGINT', () => void stop().then(() => process.exit(0)));
 process.on('SIGTERM', () => void stop().then(() => process.exit(0)));
 
@@ -304,16 +272,4 @@ function readToken(path) {
     /* first run */
   }
   return newToken();
-}
-
-function freePort() {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const value = probe.address();
-      const port = typeof value === 'object' && value ? value.port : 0;
-      probe.close(() => resolve(port));
-    });
-  });
 }

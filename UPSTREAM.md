@@ -1,105 +1,117 @@
-# Upstream tracking
+# Official source reuse and audit
 
-This project is a **host** for the official MiniMax Bot Mini App. The Bot page,
-engine, group chat, memory, schedules and MCP tools come from the MiniApps
-repository. The Mini App runner this host uses comes from the runtime
-repository. This repository contains neither.
+The policy is to run official implementations unchanged whenever the required
+capability exists. Local code is integration between published contracts, Linux
+remote access, or the separately requested phone and update features.
 
-Two upstreams matter:
+## Pinned inputs
 
-| | Repository | What this host takes from it |
+`upstream.lock.json` is authoritative for both repositories:
+
+| Input | Official repository | Pinned version |
 | --- | --- | --- |
-| **plugin** | [MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps) | `plugins/minimax-ai/minimax-bot` — the whole Mini App, loaded unchanged |
-| **runtime** | [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code) | `startMiniAppModule` from `packages/local-runtime-v2/.../node-runtime/host-runner.ts`, ported into `src/official-host.mjs` |
+| Bot | [MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps) | 0.7.18, `c4bfe68e12c42a3a8128081ed5238b0689bb03b5` |
+| Runtime / CLI | [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code) | 0.7.2, `6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc` |
 
-Both are MIT. The plugin and its protocol stay upstream's; the runtime port keeps
-upstream's flow and is credited in the file header.
+The installer checks out these revisions, installs the official workspace using
+its package-manager pin, and builds its CLI with the official build script.
+It also bundles the required TypeScript exports without modifying their sources.
+The generated bundle is committed so ordinary host tests do not need a full
+workspace checkout. `src/vendor/official-miniapp.provenance.json` records every
+bundle input and SHA-256, the upstream revision, bundler version, and output hash.
+The upstream license is retained; bundled dependency legal notices stay in the
+bundle, and complete dependency license texts are copied into
+`src/vendor/official-miniapp.NOTICES.md`. The official checkout retains its own
+license inventory.
 
-## Why the runtime is ported rather than imported
+## Implementation inventory
 
-`minimax-code` is a TypeScript workspace. Its runner imports `@mavis/*` packages
-and the Mini App contracts from the same workspace, so it cannot be imported
-from a plain Node process the way this host runs.
+Official paths below are relative to the pinned `minimax-code` checkout.
 
-The port keeps the parts that decide behaviour:
+| Responsibility | Actual implementation |
+| --- | --- |
+| Bot UI, engine, groups, memory, schedules, tasks and team tools | The unchanged MiniApps plugin; no local copies of its business logic |
+| Spawn, startup protocol, TCP readiness/deadlines, port retry, root termination and cleanup | Official `createMiniAppNodeRuntimeAdapter` from `packages/local-runtime-v2/src/service/miniapp/process/node-runtime/node-runtime.ts` |
+| Frozen context, realpath containment, named start validation, abort/dispose, runner IPC | Official `startMiniAppModule` and `runMiniAppHostRunner` from the adjacent `host-runner.ts` |
+| Port ownership | Official `HostMiniAppPortRegistry` from the adjacent `port-registry.ts` |
+| Runtime payload materialization and candidate verification | Official `WorkspaceMiniAppStorage`, package readers/digests and MiniApp candidate helpers under `service/plugin-system/plugin/` |
+| Agent execution, tools, storage, providers and model controls | The unmodified official CLI build, running its ACP entry point |
+| ACP transport | Official `@agentclientprotocol/sdk`; `src/acp.mjs` adapts Node streams and callbacks |
+| Team MCP connection | Official ACP `session/new` and `session/resume` MCP overlays, followed by official MCP discovery and invocation |
+| Model discovery and persistence | Official `McodeProviderApplication.refreshModels` via `scripts/refresh-models.mjs`; this invokes its existing Runtime APIs |
+| Model and reasoning selection | The official session's advertised `configOptions`; local mapping translates them to the Bot's picker contract |
+| Questionnaire execution | Official ACP form elicitation; the local bridge maps forms and answers to the Bot contract |
 
-- resolve the package root and the entry, refuse an entry outside the package
-  (`ENTRY_OUTSIDE_ARTIFACT`);
-- refuse a module without a `start` export (`START_EXPORT_MISSING`);
-- hand the plugin a frozen context;
-- abort the signal, then await `dispose`, and refuse a `start` result without
-  `dispose` (`RUNNER_LIFECYCLE_INVALID`).
+`src/official-host.mjs` is now glue calling the official process adapter, not a
+rewrite of its lifecycle. `src/official-runner.mjs` uses the official runner's
+`start` and `loadModule` extension seams to add the Bot's Agent capability.
+The official implementation selects ports in 49152–65535; this host follows that
+policy instead of supplying an independently rewritten free-port algorithm.
 
-**The one deliberate difference is the `agent` field.** Upstream's context has
-`pluginId`, `pluginRoot`, `dataDir`, `generationId`, `listen`, `signal`,
-`logger` and `hostConnector` — no `agent`. A Mini App that declares
-`agentAccess` (MiniMax Bot does) cannot take a turn without one, and the
-open-source runtime never defines it. This host supplies it from a `mcode acp`
-process. Everything else in the file follows upstream.
+## Necessary compatibility boundaries
 
-`src/vendor/official-host-runner.ts` is a byte copy of the upstream source at the
-pinned commit, kept only so the weekly check can tell when the port needs
-revisiting.
+1. **Agent context.** The audited public `MiniAppStartContext` has no `agent`
+   member; the Bot consumes one. Its API declarations in MiniApps are types, not
+   an implementation. A small adapter supplies `run`, `answer`, `reply` and
+   `models` through the official ACP contract. This finding is limited to the
+   pinned source trees; it does not prove any desktop code is closed source.
+2. **Manifest generations.** The pinned Runtime reader rejects the Bot's
+   `agentAccess` and `surface.window` additions. The bridge validates the supported
+   Agent declaration and projects those integration fields out of an in-memory
+   view before invoking the original official validators. Both source trees and
+   the materialized payload remain unchanged; original bytes are hashed.
+3. **Remote HTTP.** The requested Linux domain needs a page credential, reverse
+   proxy and compression. The official process runtime's startup token establishes
+   runner readiness; it is not that remote browser credential.
+4. **Phone protocol.** `src/mobile-bridge.mjs` implements the separately requested
+   third-party `/api/mobile/v1` contract over the official Bot HTTP API. This
+   protocol has no implementation in the audited official trees.
+5. **Repository updater.** `src/host-update.js`, `src/self-update.mjs` and
+   `scripts/self-update.sh` implement the requested in-page update of this Linux
+   host repository. They do not replace the official plugin/CLI update services.
 
-## The pin
+The multi-generation plugin publication supervisor remains available in the
+upstream source. This deployment starts one pinned Bot process using the official
+process adapter and attaches its MCP endpoint using the official ACP session
+contract. It does not instantiate a second complete plugin manager alongside the
+one already owned by the CLI.
 
-`upstream.lock.json` records both commits:
+## Corrections to earlier documentation
 
-```json
-{
-  "plugin":  { "commit": "...", "version": "0.7.18", "checkedAt": "..." },
-  "runtime": { "commit": "...", "source": "...host-runner.ts", "portedInto": "src/official-host.mjs" }
-}
-```
+Earlier statements that the CLI ignores `session/new.mcpServers`, does not read
+project `.mcp.json`, lacks questionnaire support, or has no model management APIs
+were incorrect. The source and official tests demonstrate all four capabilities.
 
-The Docker image and `scripts/install.sh` check out the pinned plugin commit, so
-a deployment is reproducible.
+ACP HTTP `headers` are an array of `{name,value}` pairs. Configuration-file HTTP
+headers are an object. Confusing these two boundaries caused a local adapter bug.
+The old fallback that rewrote the user's global MCP configuration has been
+removed; Bot sessions carry their own live endpoint. A stale test endpoint also
+pointed at another application and was not evidence of missing MCP support.
 
-## Updating
+The previous model registration code cloned an unrelated configuration and
+restarted a shared Agent process. It has been removed. Selection now requires an
+officially advertised value; refresh new provider models using the official
+application before starting/restarting the service. Endpoint rows that are not
+configured are explicitly labelled rather than silently given invented settings.
+
+ACP elicitation does not transmit every Bot-specific questionnaire property
+(original correlation IDs, original mode/payload and expiry). The bridge uses a
+local correlation ID for forms; it does not invent omitted runtime metadata.
+
+## Rebuild and updates
 
 ```sh
-npm run update-upstream              # both
-npm run update-upstream -- --plugin  # the MiniMax Bot plugin only
-npm run update-upstream -- --runtime # the runtime port only
+./scripts/install.sh
+MINIMAX_RUNTIME_DIR="$PWD/../minimax-code-official" npm run build:official
+npm test
+npm run update-upstream                 # inspect both candidates; no checkout/pin changes
+npm run update-upstream -- --runtime
+npm run update-upstream -- --plugin
 ```
 
-For the plugin it moves the sibling checkout to upstream `main` and rewrites the
-pin. For the runtime it prints a diff between the vendored copy and upstream, so
-you can see whether `src/official-host.mjs` needs work.
-
-A weekly GitHub Action (`.github/workflows/upstream-check.yml`) watches both:
-it opens an `upstream` issue when the plugin version moves, and a separate one
-when `host-runner.ts` no longer matches the vendored copy. It never updates
-anything by itself — a human reviews first.
-
-## Why a host is needed at all
-
-The official MiniMax Bot runs inside the MiniMax Code desktop app (macOS and
-Windows). That app starts the plugin, injects `context.agent`, and shows the
-page. There is no Linux desktop build. This host does those three jobs on Linux:
-
-- starts `miniapp/node/server.mjs` with a data directory and a loopback port;
-- supplies `context.agent` from a `mcode acp` process (MiniMax Code CLI);
-- serves the page behind an access token.
-
-## What is reused, and what cannot be
-
-Checked against `minimax-code` at the pinned runtime commit:
-
-| Part of this host | Official code exists? | What this host does |
-| --- | --- | --- |
-| Plugin lifecycle (`start`, frozen context, abort then `dispose`) | Yes — `startMiniAppModule` in `host-runner.ts` | Ported verbatim into `src/official-host.mjs` |
-| Readiness (the port must accept a connection after `start`) | Yes — `connectMiniAppPort` in `node-runtime.ts` | Ported; a timeout disposes the plugin and reports `READINESS_TIMEOUT` |
-| Port authority (reserve the loopback port before spawning, retry the next candidate on `EADDRINUSE`) | Yes — `HostMiniAppPortRegistry` in `port-registry.ts`, driven by `prepareRuntime` | Ported; a reservation is released on failure and on `stop` |
-| Connector tools (`hostConnectorAccess`) | Yes, but **optional**: only used when a Mini App declares `hostConnectorAccess` in its manifest | Not ported — MiniMax Bot does not declare it and never calls `context.hostConnector` (verified by search over the whole plugin) |
-| Multi-generation supervisor (lease, prepare/commit/rollback across runtime generations) | Yes — `supervisor/` | Not ported — this host runs one pinned plugin version and restarts to change it |
-| ACP framing, request/response matching, notifications | Yes — `@agentclientprotocol/sdk`, as upstream uses it in `packages/tui/src/acp/stdio.ts` | `src/acp.mjs` is a thin wrapper over that SDK |
-| `context.agent` (running a turn) | **No** — the open-source context has no `agent` field, and the desktop host that supplies it is not in this repository | Written here: `src/agent.mjs` drives `mcode acp` |
-| Team tools (`list_team`, `message_bot`, `dispatch_tasks`…) | Yes, but the CLI only loads MCP servers from `<dataDir>/mcp.json` — not from the ACP session | `src/host.mjs` publishes the plugin's live `/mcp/minimax-bot` URL there on every boot |
-| Model catalog for the Bot settings picker | **No** — `providers/list` is not implemented by the CLI at the pinned version | Written here: `src/models.mjs` reads an OpenAI-compatible `/models` endpoint |
-| Phone bridge (`/api/mobile/v1`) | **No** — no `api/mobile` route exists upstream | Written here: `src/mobile-bridge.mjs`, a third-party app protocol |
-| Page access token | **No** — upstream's token is the runner's own readiness token, not a page credential | Written here: `src/token.mjs` |
-
-The four rows marked **No** are the honest scope of this host: they are host
-duties the official open-source runtime does not perform, not re-implementations
-of code that already exists.
+The weekly action compares complete upstream revisions, including changes that
+keep the same version number, and opens an issue. It does not deploy candidates.
+Review a candidate, edit the pin, build both the CLI and generated bundle, inspect
+provenance, and validate before committing the pin and generated files together.
+Do not hand-edit generated vendor output or patch the official source to make an
+integration test pass.

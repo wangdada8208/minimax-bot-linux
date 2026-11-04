@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:net';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,6 +28,7 @@ function freePort() {
  */
 test('the host boots and serves the Bot page', { skip: !pluginRoot && 'MINIMAX_BOT_PLUGIN is not set' }, async () => {
   const port = await freePort();
+  const token = randomUUID();
   const dataDir = mkdtempSync(join(tmpdir(), 'minimax-bot-host-'));
   const child = spawn(process.execPath, ['src/host.mjs'], {
     cwd: root,
@@ -37,7 +39,7 @@ test('the host boots and serves the Bot page', { skip: !pluginRoot && 'MINIMAX_B
       MINIMAX_BOT_DATA: dataDir,
       MINIMAX_BOT_CWD: dataDir,
       MINIMAX_BOT_PLUGIN: pluginRoot,
-      MINIMAX_BOT_TOKEN: 'test-token',
+      MINIMAX_BOT_TOKEN: token,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -56,7 +58,7 @@ test('the host boots and serves the Bot page', { skip: !pluginRoot && 'MINIMAX_B
     assert.match(output, /MiniMax Bot is ready/, `the host never became ready:\n${output.slice(-2000)}`);
 
     const response = await fetch(`http://127.0.0.1:${port}/bot`, {
-      headers: { cookie: 'minimax_bot=test-token' },
+      headers: { cookie: `minimax_bot=${token}` },
     });
     assert.equal(response.status, 200, 'the Bot page is served');
     const html = await response.text();
@@ -65,9 +67,27 @@ test('the host boots and serves the Bot page', { skip: !pluginRoot && 'MINIMAX_B
     // The phone bridge must be listening too; it broke when its startup call
     // was removed and only showed up as a 500 on the first mobile request.
     const mobile = await fetch(`http://127.0.0.1:${port}/api/mobile/v1/info`, {
-      headers: { cookie: 'minimax_bot=test-token' },
+      headers: { cookie: `minimax_bot=${token}` },
     });
-    assert.ok(mobile.status < 500, `the mobile bridge answered ${mobile.status}`);
+    assert.equal(mobile.status, 200, 'the mobile bridge info is served');
+    // Info is static and cannot detect a bridge pointing at an unused port.
+    // Read data through the bridge to exercise its real upstream connection.
+    const conversations = await fetch(`http://127.0.0.1:${port}/api/mobile/v1/conversations`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.equal(conversations.status, 200, 'the bridge reaches the real plugin');
+    assert.ok(Array.isArray((await conversations.json()).conversations));
+    if (process.platform === 'linux') {
+      const descendants = execFileSync('ps', ['-o', 'pid=,args=', '--ppid', String(child.pid)], { encoding: 'utf8' });
+      const runner = descendants.split('\n').find((line) => line.includes('src/official-runner.mjs'));
+      assert.ok(runner, 'the official runtime owns a separate plugin process');
+      const runnerPid = Number(runner.trim().split(/\s+/)[0]);
+      assert.ok(Number.isSafeInteger(runnerPid) && runnerPid > 1);
+      process.kill(runnerPid, 'SIGKILL');
+      const deadline = Date.now() + 10_000;
+      while (child.exitCode === null && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(child.exitCode, 1, 'a dead plugin makes the guard exit so the watchdog can recover');
+    }
   } finally {
     child.kill();
     await new Promise((resolve) => setTimeout(resolve, 500));

@@ -1,127 +1,99 @@
 # Linux 上的 MiniMax Bot
 
-[英文](README.md) | 简体中文
+[English](README.md) | 简体中文
 
-这是官方 MiniMax Bot 的 Linux 宿主。本仓库只包含宿主。Bot 页面、引擎和插件都来自上游仓库，这里不修改、也不重新分发：
+在 Linux 服务器运行官方 MiniMax Bot，并从另一台电脑打开页面。页面、引擎、团队工具、群聊、记忆和定时任务直接使用未修改的 [MiniMax-Code-MiniApps 官方插件](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot)；CLI 和插件进程生命周期直接使用 [minimax-code 官方源码](https://github.com/MiniMax-AI/minimax-code)。两个官方仓库的源文件都不修改。
 
-**上游仓库：** [MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps)
-
-**上游插件：** [`plugins/minimax-ai/minimax-bot`](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot)
-
-上游仓库使用 MIT 许可证。插件和协议仍归上游所有。这个宿主只负责启动上游插件，并提供桌面端原本会注入的 Agent 接口。
-
-桌面端通常做三件事，这个程序取代它们：
-
-- 启动 `miniapp/node/server.mjs`，分配数据目录和端口；
-- 注入 `context.agent`，Bot 只有拿到它才能进行一轮对话；
-- 在自带浏览器窗口里打开 `/bot` 页面。
-
-这里的 `context.agent` 是一个 `mcode acp` 进程。每个 Bot 对话是一个 ACP 会话。MiniMax Code 要求的工具批准会显示在 Bot 页面上，选择**允许一次**或**拒绝**就会回答该请求。页面、群聊、记忆、定时任务和 MCP 工具都是未修改的上游插件。
+本仓库只保留 Bot 与 ACP 之间必要的接口适配、远程 HTTP 访问，以及另行要求的手机协议和页面内宿主更新功能。官方 Runtime 直接构建、打包和调用，不再重写其实现。完整复用清单、锁定版本、源码哈希和兼容边界见 [UPSTREAM.md](UPSTREAM.md)。
 
 ## 环境要求
 
-- Linux（x86_64 或 arm64），VPS 或家里的服务器都可以
-- Node.js 22.19 或更新版本
-- 一个 MiniMax 账号。Bot 通过 MiniMax Code CLI 运行，用的是你自己的账号，需要执行一次 `mcode login`。
+- Linux；Node.js 22.19+（22.x）、24.2+（24.x）、25 或 26。
+- Git、npm；有 Corepack 时优先使用，没有时通过 npm 运行官方锁定的 pnpm 版本。
+- 原生扩展没有预编译文件时需要 Python、make、C++ 编译器。Debian/Ubuntu 可执行 `apt-get install python3 make g++`。
+- MiniMax 账号或已配置的兼容 BYOK 提供商。BYOK 不要求登录 MiniMax 账号。
 
-## 用 Docker 快速部署
+## 从官方源码安装
 
 ```sh
 git clone https://github.com/wangdada8208/minimax-bot-linux.git
 cd minimax-bot-linux
+./scripts/install.sh
 
+# MiniMax 账号登录；大陆账号改用 --region cn。
+node ../minimax-code-official/dist/cli.js login --region global --no-browser
+npm start
+```
+
+安装器检出 [upstream.lock.json](upstream.lock.json) 锁定的两个提交，运行官方 CLI 构建脚本，再打包未修改的官方 Runtime 导出。上游工作区有本地修改时拒绝覆盖。默认运行旁边官方源码构建出来的 CLI，不再使用另一份独立安装的 npm 版本。
+
+BYOK 使用官方 CLI 的 `provider` 命令配置。先配置、发现模型，再启动服务。需要刷新已保存提供商的完整目录时，可以直接调用官方提供商应用（示例提供商 ID）：
+
+```sh
+cd ../minimax-code-official
+TSX_TSCONFIG_PATH="$PWD/tsconfig.standalone.json" node \
+  --import ./node_modules/tsx/dist/loader.mjs \
+  ../minimax-bot-linux/scripts/refresh-models.mjs custom_provider:magpie --apply
+```
+
+这里调用官方发现、合并、版本检查和保存逻辑，保留已有模型，不切换默认模型。刷新后重启宿主。每轮对话不会再复制其他模型配置或重启共享 Agent 进程。Magpie 兼容目录明确公布思考档位时，可加 `--sync-reasoning`，把服务端声明的档位通过官方保存 API 写入；不按模型名称猜测能力。
+
+## Docker
+
+```sh
 docker compose build
-docker compose run --rm minimax-bot mcode login --no-browser   # 中国大陆账号加 --region cn
+docker compose run --rm minimax-bot mcode login --region global --no-browser
 docker compose up -d
-docker compose logs -f        # 打印带访问令牌的页面地址
+docker compose logs -f
 ```
 
-数据在 `./data`，CLI 登录信息在 `./minimax-home`。compose 只绑定 `127.0.0.1:8787`，对外访问前请自己加一层带登录的 HTTPS 反向代理。
+镜像也从锁定源码构建官方 CLI，打包同一批官方 Runtime 导出。Bot 数据在 `./data`，账号和提供商数据在 `./minimax-home`。Compose 绑定 `127.0.0.1:8787`，远程访问通过自己的 HTTPS 反向代理。
 
-## 不用 Docker 快速部署
-
-```sh
-git clone https://github.com/wangdada8208/minimax-bot-linux.git
-cd minimax-bot-linux
-./scripts/install.sh          # 安装依赖、mcode CLI 和锁定版本的上游插件
-mcode login --region global --no-browser
-MINIMAX_BOT_PLUGIN="$PWD/../MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot" npm start
-```
-
-中国大陆账号把 `--region global` 换成 `--region cn`。如果要使用自己的 OpenAI 兼容模型目录，设置 `MINIMAX_BOT_MODELS_URL` 和 `MINIMAX_BOT_MODELS_API_KEY`。密钥只从环境变量读取，本仓库不会写入密钥。
-
-进程会打印类似 `http://127.0.0.1:8787/bot?token=...` 的地址。打开后会写入 HttpOnly cookie 并跳转到 `/bot`。令牌保存在 `~/.minimax-bot/access-token`。没有令牌的请求返回 `401`。
-
-第一条消息会启动 `mcode acp`。在完成 `mcode login` 之前，进程没有可用模型，回复会失败；页面仍然能打开，Bot、群聊和记忆也可以创建。
+仓库提供 Docker 构建路径；Linux 本机源码运行通过，不等于 Docker 和所有 CPU 架构都已完成验证。
 
 ## 配置
 
 | 变量 | 默认值 | 含义 |
 | --- | --- | --- |
-| `MINIMAX_BOT_HOST` | `127.0.0.1` | 受令牌保护的页面监听地址 |
-| `MINIMAX_BOT_PORT` | `8787` | 页面监听端口 |
-| `MINIMAX_BOT_DATA` | `~/.minimax-bot` | Bot 状态、消息、记忆、头像和附件 |
-| `MINIMAX_BOT_CWD` | 当前目录 | 每个 Bot 会话可以读写的工作目录 |
-| `MINIMAX_BOT_MCODE` | `mcode` | MiniMax Code CLI 可执行文件。以 `.js` 结尾的路径会用 `MINIMAX_BOT_NODE` 运行，默认是启动宿主的 Node，避免 `#!/usr/bin/env node` 去 PATH 里查找解释器。 |
-| `MINIMAX_BOT_PLUGIN` | 旁边的 `MiniMax-Code-MiniApps` 仓库 | 上游官方插件目录 |
-| `MINIMAX_BOT_TOKEN` | 从 `access-token` 读取 | 覆盖已保存的页面令牌 |
+| `MINIMAX_BOT_HOST` | `127.0.0.1` | 远程页面监听地址 |
+| `MINIMAX_BOT_PORT` | `8787` | 远程页面端口 |
+| `MINIMAX_BOT_DATA` | `~/.minimax-bot` | 官方 Bot 状态和历史 |
+| `MINIMAX_BOT_CWD` | 当前目录 | Agent 工作目录 |
+| `MINIMAX_RUNTIME_DIR` | 旁边的 `minimax-code-official` | 官方源码和构建目录 |
+| `MINIMAX_BOT_MCODE` | 上述目录的 `dist/cli.js` | 指定官方 CLI 入口或可执行文件 |
+| `MINIMAX_BOT_NODE` | 宿主使用的 Node | 官方子进程和 `.js` CLI 使用的 Node |
+| `MINIMAX_BOT_PLUGIN` | 旁边 MiniApps 的 Bot 目录 | 未修改的官方插件 |
+| `MINIMAX_BOT_TOKEN` | 已保存的 `access-token` | 远程浏览器凭证 |
+| `MINIMAX_BOT_MODELS_URL` | 不设置 | 可选的模型目录元数据 |
+| `MINIMAX_BOT_MODELS_API_KEY` | 不设置 | 目录凭证，仅留在服务器环境里 |
 
-请把 `MINIMAX_BOT_HOST` 绑定到 `127.0.0.1`，再通过带登录的反向代理访问。每一轮都可以使用 `MINIMAX_BOT_CWD` 里的文件和 shell，所以不要把端口直接公开到网络。
+打开启动时打印的 `/bot?token=...` 地址，会写入 HttpOnly cookie 并跳转到 `/bot`；未认证的私有请求返回 401。CLI 的数据目录遵循官方配置，包括 `MINIMAX_DATA_DIR`、`MAVIS_DATA_DIR` 和 profile；宿主不再重写其全局 MCP 文件。
 
-## 让它常驻
+## 哪些由官方负责
 
-宿主就是一个普通的长驻进程。放在服务器上时，建议注册成系统服务，崩溃或重启后会自动拉起：
+官方进程适配器负责物化运行载荷、预留端口、启动 IPC runner、就绪检测、端口冲突重试，以及关闭时确认进程退出。小型引导模块通过官方 `loadModule` 扩展点提供 `context.agent`：本次审计的公开 runner context 没有该成员，而 Bot 需要它。
+
+子进程中的官方 ACP 进程处理 Bot 会话。新建和恢复会话都按官方 ACP 契约携带团队 MCP 端点；模型和思考档位使用官方会话实际公布的选项；官方 ACP 表单问答映射到 Bot 页面。ACP 没传输的部分 Bot 问卷元数据不会凭空补造，具体限制见 [UPSTREAM.md](UPSTREAM.md)。
+
+锁定 Runtime 的清单校验器早于 Bot 的 `agentAccess` 和 `surface.window` 字段。适配层只在内存校验视图里处理这两个字段，并提供声明的 Agent 能力；原清单和运行载荷字节不变。它不等于完整桌面宿主。
+
+## 常驻与更新
+
+可使用 [systemd 服务](deploy/minimax-bot.service)、[环境变量示例](deploy/minimax-bot.env.example)，或 `scripts/watchdog.sh --daemon`。
+
+页面注入的更新按钮对本宿主仓库执行快进更新，发现本地修改冲突时明确拒绝，然后交给 watchdog 重启。它和接受新的官方源码锁定版本是两件事。检查上游候选变化：
 
 ```sh
-sudo cp deploy/minimax-bot.service /etc/systemd/system/
-sudo cp deploy/minimax-bot.env.example /etc/minimax-bot.env   # 然后改成你的路径
-sudo systemctl daemon-reload
-sudo systemctl enable --now minimax-bot
+npm run update-upstream
 ```
 
-没有 systemd 时，运行 `scripts/watchdog.sh --daemon`，进程退出后会自动重启。
+每周工作流监测两个官方仓库的完整提交，包括版本号没变的源码更新，并创建 issue。接受候选前审阅变化、构建官方产物并验证。
 
-## 跟踪上游
-
-本宿主锁定在一个上游提交上，记录在 [`upstream.lock.json`](upstream.lock.json)（目前是 MiniMax Bot **0.7.18**）。Docker 镜像和安装脚本都会检出这个确切的提交，所以部署结果可复现。
-
-```sh
-npm run update-upstream      # 把锁定版本推进到上游 main 最新
-```
-
-每周一次的 GitHub Action 会对比锁定版本和上游；上游出新版本时自动开一个带 `upstream` 标签的 issue。详见 [UPSTREAM.md](UPSTREAM.md)。
-
-## 与桌面端的差别
-
-- ACP 不返回桌面端的问卷对象。模型提出的问题会以文本回到对话，而不是页面内的表单。
-- Bot 设置里的模型选择器使用 `MINIMAX_BOT_MODELS_URL` 提供的目录。选中的模型会在每一轮开始前应用到该 Bot 的 ACP 会话。如果模型服务不接这个模型，回合仍然会失败。思考档位会随选择保存；ACP 应用模型和变体，思考控制仍由它自己的会话保留。
-- 桌面端创建的会话在 CLI 中不存在。拷贝过来的 Bot 数据保留历史和记忆，下一条消息会开启一个新的 CLI 会话。
-- 插件自己的 MCP 服务还没有接回 `mcode`，所以 Bot 暂时不能通过 CLI 调用 `message_bot` 等工具。群聊回复仍然由页面自己的引擎驱动。
-
-## 测试
+## 验证
 
 ```sh
 npm test
+MINIMAX_BOT_PLUGIN="$PWD/../MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot" npm test
 ```
 
-测试使用假的 ACP 进程，不会调用 MiniMax。
-
-## 复用了哪些官方实现，哪些官方没有
-
-对照 `minimax-code` 的锁定版本核对过：
-
-| 宿主中的部分 | 官方有吗 | 这里怎么处理 |
-| --- | --- | --- |
-| 插件生命周期（`start`、冻结 context、先 abort 再 `dispose`） | 有，`host-runner.ts` 的 `startMiniAppModule` | 原样移植到 `src/official-host.mjs` |
-| 就绪检测（`start` 之后端口必须能连） | 有，`node-runtime.ts` 的 `connectMiniAppPort` | 移植；超时会先 dispose 再报 `READINESS_TIMEOUT` |
-| 端口权威（启动前预留回环端口，`EADDRINUSE` 时换下一个候选端口重试） | 有，`port-registry.ts` 的 `HostMiniAppPortRegistry`，由 `prepareRuntime` 驱动 | 移植；失败和 `stop` 时都会释放预留 |
-| 连接器工具（`hostConnectorAccess`） | 有，但**是可选项**：只有 Mini App 在清单里声明 `hostConnectorAccess` 才会用到 | 未移植 —— MiniMax Bot 没有声明，且整个插件搜不到 `context.hostConnector` 的调用 |
-| 多代运行时管理器（租约、逐代 prepare/commit/rollback） | 有，`supervisor/` | 未移植 —— 本宿主只跑一个锁定版本的插件，换版本靠重启 |
-| ACP 分帧、请求响应配对、通知 | 有，`@agentclientprotocol/sdk`，与官方 `packages/tui/src/acp/stdio.ts` 同一套 | `src/acp.mjs` 只是这个 SDK 的薄封装 |
-| `context.agent`（跑一轮对话） | **没有**。开源版 context 里没有 `agent` 字段，提供它的是未开源的桌面端 | 自写：`src/agent.mjs` 驱动 `mcode acp` |
-| 团队工具（`list_team`、`message_bot`、`dispatch_tasks` 等） | 有，但 CLI 只从 `<dataDir>/mcp.json` 加载 MCP，不认 ACP 会话参数 | `src/host.mjs` 每次启动把插件真实的 `/mcp/minimax-bot` 地址写进那个文件 |
-| Bot 设置用的模型目录 | **没有**。锁定版本的 CLI 不实现 `providers/list` | 自写：`src/models.mjs` 读取 OpenAI 兼容的 `/models` |
-| 手机端桥接（`/api/mobile/v1`） | **没有**。上游不存在 `api/mobile` 路由 | 自写：`src/mobile-bridge.mjs`，供第三方 App 使用 |
-| 页面访问令牌 | **没有**。官方的 token 是运行时就绪用的，不是页面凭证 | 自写：`src/token.mjs` |
-
-标 **没有** 的四项，是官方开源运行时本来就不承担的宿主职责，不是把已有代码重写了一遍。
+测试覆盖 ACP 契约、问卷继续执行、模型选择、并发会话互不打断、真实官方子进程的生命周期和失败清理、端口重试、手机协议以及更新拒绝。设置插件变量后还会启动真实 Bot，并通过手机桥接读取其数据。模型服务和跨 Bot 派单需要另外进行在线验收。

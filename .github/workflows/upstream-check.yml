@@ -14,91 +14,32 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Compare the pinned plugin with upstream
-        id: plugin
-        run: |
-          set -euo pipefail
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git /tmp/plugin
-          git -C /tmp/plugin sparse-checkout set plugins/minimax-ai/minimax-bot
-          pinned="$(node -p "require('./upstream.lock.json').plugin.version")"
-          latest="$(node -p "require('/tmp/plugin/plugins/minimax-ai/minimax-bot/.minimax-plugin/plugin.json').version")"
-          echo "pinned=$pinned" >> "$GITHUB_OUTPUT"
-          echo "latest=$latest" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git -C /tmp/plugin rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Compare the ported runner with upstream
-        id: runtime
-        run: |
-          set -euo pipefail
-          path="packages/local-runtime-v2/src/service/miniapp/process/node-runtime/host-runner.ts"
-          git clone --depth 1 --filter=blob:none --sparse \
-            https://github.com/MiniMax-AI/minimax-code.git /tmp/runtime
-          git -C /tmp/runtime sparse-checkout set "$(dirname "$path")"
-          git -C /tmp/runtime show "HEAD:$path" > /tmp/host-runner.latest.ts
-          echo "commit=$(git -C /tmp/runtime rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if diff -q src/vendor/official-host-runner.ts /tmp/host-runner.latest.ts >/dev/null 2>&1; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Open an issue when the plugin version moves
-        if: steps.plugin.outputs.latest != steps.plugin.outputs.pinned
+      - name: Compare both complete upstream revisions
         uses: actions/github-script@v7
-        env:
-          LATEST: ${{ steps.plugin.outputs.latest }}
-          PINNED: ${{ steps.plugin.outputs.pinned }}
-          COMMIT: ${{ steps.plugin.outputs.commit }}
         with:
           script: |
-            const title = `Upstream MiniMax Bot ${process.env.LATEST} available (pinned ${process.env.PINNED})`;
+            const fs = require('node:fs');
+            const lock = JSON.parse(fs.readFileSync('upstream.lock.json', 'utf8'));
             const { data: open } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: 'upstream',
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: 'upstream', per_page: 100,
             });
-            if (open.some((i) => i.title === title)) return;
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title,
-              labels: ['upstream'],
-              body: [
-                `Upstream MiniMax Bot is now **${process.env.LATEST}** (pinned: ${process.env.PINNED}).`,
-                '',
-                'Run `npm run update-upstream -- --plugin`, review the diff, then restart the host.',
-                '',
-                `Upstream commit: \`${process.env.COMMIT}\``,
-              ].join('\n'),
-            });
-
-      - name: Open an issue when the ported runner changed
-        if: steps.runtime.outputs.changed == 'true'
-        uses: actions/github-script@v7
-        env:
-          COMMIT: ${{ steps.runtime.outputs.commit }}
-        with:
-          script: |
-            const title = 'Upstream Mini App runner changed: re-check src/official-host.mjs';
-            const { data: open } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner, repo: context.repo.repo, state: 'open', labels: 'upstream',
-            });
-            if (open.some((i) => i.title === title)) return;
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title,
-              labels: ['upstream'],
-              body: [
-                '`host-runner.ts` in MiniMax-AI/minimax-code no longer matches `src/vendor/official-host-runner.ts`.',
-                '',
-                '1. `npm run update-upstream -- --runtime` to see the diff.',
-                '2. Bring `src/official-host.mjs` in line, keeping the `agent` addition.',
-                '3. Refresh the vendored copy and the pin.',
-                '',
-                `Upstream commit: \`${process.env.COMMIT}\``,
-              ].join('\n'),
-            });
+            for (const key of ['plugin', 'runtime']) {
+              const [owner, repo] = lock[key].repository.split('/');
+              const { data: latest } = await github.rest.repos.getCommit({ owner, repo, ref: 'main' });
+              if (latest.sha === lock[key].commit) continue;
+              const title = `Upstream ${key} changed: ${latest.sha.slice(0, 12)}`;
+              if (open.some((issue) => issue.title === title)) continue;
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, labels: ['upstream'],
+                body: [
+                  `Pinned: ${lock[key].commit}`,
+                  `Candidate: ${latest.sha}`,
+                  `Compare: https://github.com/${owner}/${repo}/compare/${lock[key].commit}...${latest.sha}`,
+                  '',
+                  'Review the complete upstream diff with `npm run update-upstream`.',
+                  'An accepted runtime pin requires rebuilding the official CLI and generated runtime bundle,',
+                  'reviewing source provenance, and passing protocol/startup/live team-tool checks.',
+                  'Keep upstream source files unchanged. Commit pins and generated artifacts together.',
+                ].join('\n'),
+              });
+            }

@@ -22,16 +22,16 @@
     "acp"
   ],
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22.19 <23 || >=24.2 <27"
   },
   "scripts": {
     "start": "node src/host.mjs",
+    "build:official": "node scripts/build-official.mjs",
     "test": "node --test test/*.test.mjs",
     "update-upstream": "bash scripts/update-upstream.sh"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^2.4.0",
-    "ws": "^8.22.0",
-    "yaml": "^2.9.1"
+    "ws": "^8.22.0"
   }
 }

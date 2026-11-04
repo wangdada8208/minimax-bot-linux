@@ -8,9 +8,11 @@
   },
   "runtime": {
     "repository": "MiniMax-AI/minimax-code",
-    "source": "packages/local-runtime-v2/src/service/miniapp/process/node-runtime/host-runner.ts",
     "commit": "6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc",
-    "portedInto": "src/official-host.mjs",
-    "checkedAt": "2026-11-03"
+    "version": "0.7.2",
+    "sourcePolicy": "Build official CLI and bundle official sources unchanged",
+    "bundle": "src/vendor/official-miniapp.mjs",
+    "provenance": "src/vendor/official-miniapp.provenance.json",
+    "checkedAt": "2026-11-04"
   }
 }

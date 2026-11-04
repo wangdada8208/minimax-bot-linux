@@ -1,56 +1,39 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
-import { acpModelValue, catalogFromModels, ensureConfiguredModel, toCatalogModel } from '../src/models.mjs';
+import { acpModelValue, catalogFromModels, catalogFromControls, parseModelConfigValue } from '../src/models.mjs';
 
-test('turns a Magpie model into the picker shape', () => {
-  const model = toCatalogModel({
-    id: 'group/cursor-grok-4.7-500k',
-    display_name: 'Cursor Grok 4.7 @ 500k',
-    supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }, { effort: 'high' }],
-  });
-  assert.equal(model.providerId, 'custom_provider:magpie');
-  assert.equal(model.modelId, 'group/cursor-grok-4.7-500k');
-  assert.deepEqual(model.thinking.efforts, ['low', 'high']);
-  assert.equal(model.thinking.default, 'high');
-  assert.deepEqual(model.variants, ['thinking', '']);
-});
+const plain = 'm:custom_provider%3Amagpie:group%2Fmodel:u';
+const thinking = 'm:custom_provider%3Amagpie:group%2Fmodel:v:thinking';
+const controls = [{ id: 'model', currentValue: plain, options: [{ value: plain, name: 'Model' }, { value: thinking, name: 'Model · thinking' }] }];
 
-test('uses the 500k Grok model as the default and skips blank ids', () => {
-  const catalog = catalogFromModels({
-    data: [{ id: '' }, { id: 'server/auto/other', display_name: 'Other' }, { id: 'group/cursor-grok-4.7-500k' }],
-  });
-  assert.equal(catalog.models.length, 2);
-  assert.equal(catalog.default.modelId, 'group/cursor-grok-4.7-500k');
-});
-
-test('adds a selected Magpie model without dropping the existing one', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'minimax-bot-config-'));
-  const path = join(dir, 'config.yaml');
-  writeFileSync(path, [
-    'custom_provider:',
-    '  magpie:',
-    '    models:',
-    '      group/cursor-grok-4.7-500k:',
-    '        reasoning: true',
-    '',
-  ].join('\n'));
-  const model = { providerId: 'custom_provider:magpie', modelId: 'group/cursor-opus-5' };
-  assert.equal(ensureConfiguredModel(path, model), true);
-  assert.equal(ensureConfiguredModel(path, model), false);
-  const saved = readFileSync(path, 'utf8');
-  assert.match(saved, /group\/cursor-grok-4\.7-500k:/);
-  assert.match(saved, /group\/cursor-opus-5:/);
-  assert.match(saved, /reasoning: true/);
-  rmSync(dir, { recursive: true, force: true });
-});
-
-test('encodes a selected model as an ACP config value', () => {
-  assert.equal(
-    acpModelValue({ providerId: 'custom_provider:magpie', modelId: 'group/cursor-opus-5', variant: '' }),
-    'm:custom_provider%3Amagpie:group%2Fcursor-opus-5:v:',
-  );
+test('selects an advertised opaque value without forcing thinking', () => {
+  const model = { providerId: 'custom_provider:magpie', modelId: 'group/model' };
+  assert.equal(acpModelValue(model, controls), plain);
+  assert.equal(acpModelValue({ ...model, variant: 'thinking' }, controls), thinking);
+  assert.throws(() => acpModelValue({ ...model, variant: '' }, controls), /not advertised/);
   assert.equal(acpModelValue({}), '');
+});
+
+test('decodes official undefined and empty variants distinctly', () => {
+  assert.deepEqual(parseModelConfigValue(plain), { providerId: 'custom_provider:magpie', modelId: 'group/model' });
+  assert.deepEqual(parseModelConfigValue('m:p:m:v:'), { providerId: 'p', modelId: 'm', variant: '' });
+  assert.throws(() => parseModelConfigValue('m:p:m:u:extra'), /Invalid/);
+});
+
+test('retains all 286 catalog models and marks unsupported choices explicitly', () => {
+  const rows = Array.from({ length: 286 }, (_, index) => ({ id: index === 0 ? 'group/model' : `model-${index}` }));
+  const catalog = catalogFromModels({ data: rows }, controls);
+  assert.equal(catalog.models.length, 286);
+  assert.equal(catalog.models[0].supported, true);
+  assert.equal(catalog.models[1].supported, false);
+  assert.match(catalog.models[1].displayName, /not configured/);
+  assert.match(catalog.models[1].unsupportedReason, /official provider/);
+  assert.equal(catalog.default.modelId, 'group/model');
+  assert.throws(() => acpModelValue(catalog.models[1], controls), /not advertised/);
+});
+
+test('catalog reasoning levels come only from current official controls', () => {
+  const catalog = catalogFromControls([...controls, { id: 'thinkingEffort', currentValue: 'medium', options: [{ value: 'low' }, { value: 'medium' }] }]);
+  assert.deepEqual(catalog.models[0].thinking, { efforts: ['low', 'medium'], default: 'medium' });
+  assert.deepEqual(catalog.models[0].variants, ['thinking']);
 });

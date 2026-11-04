@@ -1,76 +1,33 @@
 #!/usr/bin/env bash
-# Record the upstream commits this host is built against.
-#
-# Two upstreams matter:
-#   plugin  — MiniMax-AI/MiniMax-Code-MiniApps, the MiniMax Bot Mini App itself
-#   runtime — MiniMax-AI/minimax-code, whose Mini App runner is ported into
-#             src/official-host.mjs
-#
-# Usage: npm run update-upstream [-- --plugin|--runtime]
-# Prints what changed; the caller reviews and commits upstream.lock.json.
+# Inspect candidates without moving a running checkout or silently advancing pins.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOCK="$ROOT/upstream.lock.json"
 WHICH="${1:-both}"
-
-PLUGIN_URL="${MINIMAX_PLUGIN_REPO:-https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git}"
-PLUGIN_DIR="${MINIMAX_PLUGIN_DIR:-$ROOT/../MiniMax-Code-MiniApps}"
-PLUGIN_PATH="plugins/minimax-ai/minimax-bot"
-
-RUNTIME_URL="${MINIMAX_RUNTIME_REPO:-https://github.com/MiniMax-AI/minimax-code.git}"
-RUNTIME_DIR="${MINIMAX_RUNTIME_DIR:-$ROOT/../minimax-code}"
-RUNTIME_PATH="packages/local-runtime-v2/src/service/miniapp/process/node-runtime/host-runner.ts"
-
-read_lock() {
-  node -e '
-    const lock = require(process.argv[1]);
-    const key = process.argv[2];
-    process.stdout.write(lock[key]?.commit ?? "");
-  ' "$LOCK" "$1"
-}
-
-write_lock() {
-  node - "$LOCK" "$1" "$2" "$3" <<'NODE'
-const fs = require('node:fs');
-const [file, key, commit, extra] = process.argv.slice(2);
-const lock = JSON.parse(fs.readFileSync(file, 'utf8'));
-lock[key] = { ...lock[key], commit, checkedAt: new Date().toISOString().slice(0, 10), ...(extra ? JSON.parse(extra) : {}) };
-fs.writeFileSync(file, `${JSON.stringify(lock, null, 2)}\n`);
-NODE
-}
-
-if [ "$WHICH" = "both" ] || [ "$WHICH" = "--plugin" ]; then
-  [ -d "$PLUGIN_DIR/.git" ] || git clone --depth 1 "$PLUGIN_URL" "$PLUGIN_DIR"
-  git -C "$PLUGIN_DIR" fetch --depth 1 origin main
-  commit="$(git -C "$PLUGIN_DIR" rev-parse origin/main)"
-  version="$(git -C "$PLUGIN_DIR" show "origin/main:$PLUGIN_PATH/.minimax-plugin/plugin.json" \
-    | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')"
-  echo "plugin:  $(read_lock plugin) -> $commit ($version)"
-  git -C "$PLUGIN_DIR" checkout --detach "$commit"
-  write_lock plugin "$commit" "{\"version\":\"$version\",\"repository\":\"MiniMax-AI/MiniMax-Code-MiniApps\",\"path\":\"$PLUGIN_PATH\"}"
-fi
-
-if [ "$WHICH" = "both" ] || [ "$WHICH" = "--runtime" ]; then
-  [ -d "$RUNTIME_DIR/.git" ] || git clone --depth 1 --filter=blob:none --sparse "$RUNTIME_URL" "$RUNTIME_DIR"
-  git -C "$RUNTIME_DIR" fetch --depth 1 origin main
-  commit="$(git -C "$RUNTIME_DIR" rev-parse origin/main)"
-  echo "runtime: $(read_lock runtime) -> $commit"
-  echo
-  echo "--- did the upstream runner change since the port? ---"
-  if git -C "$RUNTIME_DIR" cat-file -e "origin/main:$RUNTIME_PATH" 2>/dev/null; then
-    git -C "$RUNTIME_DIR" show "origin/main:$RUNTIME_PATH" > /tmp/host-runner.latest.ts
-    if diff -q "$ROOT/src/vendor/official-host-runner.ts" /tmp/host-runner.latest.ts >/dev/null 2>&1; then
-      echo "unchanged since the vendored copy"
-    else
-      echo "CHANGED: review src/official-host.mjs against /tmp/host-runner.latest.ts"
-      diff -u "$ROOT/src/vendor/official-host-runner.ts" /tmp/host-runner.latest.ts | head -60 || true
-    fi
-  else
-    echo "path missing upstream; the port needs a re-check" >&2
+case "$WHICH" in both|--plugin|--runtime) ;; *) echo 'Usage: update-upstream.sh [--plugin|--runtime]' >&2; exit 2 ;; esac
+inspect() {
+  local key="$1" directory="$2" repository="$3"
+  local pinned latest
+  pinned="$(node -p "require('$ROOT/upstream.lock.json').$key.commit")"
+  if [ ! -d "$directory/.git" ]; then
+    echo "$key checkout missing; run scripts/install.sh first: $directory" >&2
+    exit 1
   fi
-  write_lock runtime "$commit" "{\"repository\":\"MiniMax-AI/minimax-code\",\"source\":\"$RUNTIME_PATH\",\"portedInto\":\"src/official-host.mjs\"}"
+  git -C "$directory" fetch origin main
+  latest="$(git -C "$directory" rev-parse FETCH_HEAD)"
+  echo "$key: $pinned -> $latest"
+  git -C "$directory" diff --stat "$pinned" "$latest"
+  echo "Review: https://github.com/$repository/compare/$pinned...$latest"
+}
+if [ "$WHICH" = both ] || [ "$WHICH" = --plugin ]; then
+  inspect plugin "${MINIMAX_PLUGIN_DIR:-$ROOT/../MiniMax-Code-MiniApps}" MiniMax-AI/MiniMax-Code-MiniApps
 fi
+if [ "$WHICH" = both ] || [ "$WHICH" = --runtime ]; then
+  inspect runtime "${MINIMAX_RUNTIME_DIR:-$ROOT/../minimax-code-official}" MiniMax-AI/minimax-code
+fi
+cat <<'EOF'
 
-echo
-echo "Review the diff, then commit upstream.lock.json and restart the host."
+Inspection complete. The running sources and pins are unchanged.
+After reviewing a candidate, edit upstream.lock.json, run scripts/install.sh,
+run the adapter tests and live team-tool checks, then commit the pin together
+with the rebuilt official bundle and provenance. Do not patch upstream sources.
+EOF

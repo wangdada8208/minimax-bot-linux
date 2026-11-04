@@ -1,41 +1,54 @@
 #!/usr/bin/env bash
-# Install on a bare Linux server. Installs Node deps, the MiniMax Code CLI,
-# and the pinned upstream plugin, then prints the next step (sign in).
+# Build the pinned, unmodified official CLI and runtime, then install this adapter.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-UPSTREAM_URL="${MINIMAX_UPSTREAM_REPO:-https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git}"
-UPSTREAM_DIR="${MINIMAX_UPSTREAM_DIR:-$ROOT/../MiniMax-Code-MiniApps}"
-PLUGIN_REL="plugins/minimax-ai/minimax-bot"
-COMMIT="$(node -p "require('$ROOT/upstream.lock.json').plugin.commit")"
+RUNTIME_DIR="${MINIMAX_RUNTIME_DIR:-$ROOT/../minimax-code-official}"
+PLUGIN_DIR="${MINIMAX_PLUGIN_DIR:-${MINIMAX_UPSTREAM_DIR:-$ROOT/../MiniMax-Code-MiniApps}}"
 
-command -v node >/dev/null || { echo "Install Node.js 22.19+ first: https://nodejs.org"; exit 1; }
-node -e 'const [a,b]=process.versions.node.split(".").map(Number); if(a<22||(a===22&&b<19)) { console.error("Node 22.19+ required, found "+process.versions.node); process.exit(1); }'
+command -v node >/dev/null || { echo 'Install a supported Node.js runtime first.' >&2; exit 1; }
+node -e 'const [a,b]=process.versions.node.split(".").map(Number); if(!((a===22&&b>=19)||(a===24&&b>=2)||a===25||a===26)) { console.error("Official runtime requires Node 22.19+ (22.x), 24.2+ (24.x), 25 or 26."); process.exit(1); }'
+command -v git >/dev/null
 
-echo "==> Installing host dependencies"
-(cd "$ROOT" && npm install --omit=dev)
+# Do not replace local source edits. Existing clean checkouts can move to the pin.
+checkout_pin() {
+  local target="$1" repository="$2" commit="$3"
+  if [ ! -e "$target" ]; then git clone "$repository" "$target"; fi
+  git -C "$target" rev-parse --git-dir >/dev/null
+  if [ -n "$(git -C "$target" status --porcelain)" ]; then
+    echo "Refusing to change a dirty upstream checkout: $target" >&2
+    exit 1
+  fi
+  git -C "$target" cat-file -e "$commit^{commit}" 2>/dev/null || git -C "$target" fetch origin "$commit"
+  git -C "$target" checkout --detach "$commit"
+}
+plugin_commit="$(node -p "require('$ROOT/upstream.lock.json').plugin.commit")"
+runtime_commit="$(node -p "require('$ROOT/upstream.lock.json').runtime.commit")"
+checkout_pin "$PLUGIN_DIR" "${MINIMAX_PLUGIN_REPO:-https://github.com/MiniMax-AI/MiniMax-Code-MiniApps.git}" "$plugin_commit"
+checkout_pin "$RUNTIME_DIR" "${MINIMAX_RUNTIME_REPO:-https://github.com/MiniMax-AI/minimax-code.git}" "$runtime_commit"
 
-echo "==> Installing MiniMax Code CLI"
-npm install -g @minimax-ai/code
-
-echo "==> Fetching upstream plugin at $COMMIT"
-if [ ! -d "$UPSTREAM_DIR/.git" ]; then
-  git clone "$UPSTREAM_URL" "$UPSTREAM_DIR"
+manager="$(node -p "require('$RUNTIME_DIR/package.json').packageManager")"
+if command -v corepack >/dev/null 2>&1; then
+  pnpm_command=(corepack pnpm)
+else
+  # Newer Node distributions may omit Corepack; still use the exact official pin.
+  pnpm_command=(npm exec --yes --package "$manager" -- pnpm)
 fi
-git -C "$UPSTREAM_DIR" fetch origin "$COMMIT" --depth 1 || git -C "$UPSTREAM_DIR" fetch origin main --depth 1
-git -C "$UPSTREAM_DIR" checkout --detach "$COMMIT"
+echo '==> Installing and building the official runtime (native addons may require make, g++ and Python)'
+(cd "$RUNTIME_DIR" && "${pnpm_command[@]}" install --frozen-lockfile && "${pnpm_command[@]}" build)
+echo '==> Installing adapter dependencies and bundling unmodified official sources'
+(cd "$ROOT" && npm ci && MINIMAX_RUNTIME_DIR="$RUNTIME_DIR" npm run build:official)
 
 cat <<EOF
 
-Installed.
+Official CLI: $RUNTIME_DIR/dist/cli.js
+Official plugin: $PLUGIN_DIR/plugins/minimax-ai/minimax-bot
 
-Next:
-  1. Sign in to MiniMax Code (opens a browser; use --no-browser on a headless server):
-       mcode login --region global --no-browser
-     Use --region cn for a mainland China account.
-  2. Start the host:
-       MINIMAX_BOT_PLUGIN="$UPSTREAM_DIR/$PLUGIN_REL" npm start
-     It prints a URL with an access token. Open it from another computer.
+For a MiniMax account, sign in using this exact CLI build:
+  node "$RUNTIME_DIR/dist/cli.js" login --region global --no-browser
+For BYOK, configure a provider using the official CLI's provider command.
 
-For an always-on service, see deploy/minimax-bot.service or scripts/watchdog.sh.
+Start:
+  MINIMAX_RUNTIME_DIR="$RUNTIME_DIR" \\
+  MINIMAX_BOT_MCODE="$RUNTIME_DIR/dist/cli.js" \\
+  MINIMAX_BOT_PLUGIN="$PLUGIN_DIR/plugins/minimax-ai/minimax-bot" npm start
 EOF

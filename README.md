@@ -2,148 +2,146 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Linux host for the official MiniMax Bot. This repository contains only the host.
-The Bot page, engine, and plugin come from the upstream repository and are not
-modified or redistributed here:
+Run the official MiniMax Bot on a Linux server and open its page from another
+computer. The Bot UI, engine, team tools, groups, memory and schedules come from
+[MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot), unchanged.
+The CLI and process lifecycle come directly from
+[MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code).
+Both upstream source trees remain unmodified.
 
-**Upstream:** [MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps)
-
-**Upstream plugin:** [`plugins/minimax-ai/minimax-bot`](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot)
-
-The upstream repository is licensed under MIT. Its plugin and protocol remain
-upstream's. This host only starts that plugin and supplies the Agent interface
-that the desktop app normally supplies.
-
-The desktop app normally does three things this program replaces:
-
-- it starts `miniapp/node/server.mjs` and gives it a data directory and a port;
-- it injects `context.agent`, which is the only way a Bot can take a turn;
-- it shows the page at `/bot` in its own browser window.
-
-Here `context.agent` is one `mcode acp` process. Each Bot conversation is an ACP session. Tool approvals asked by MiniMax Code appear on the Bot page, and choosing **Allow once** or **Deny** answers that ACP permission request. The page, group chats, memory, schedules, and the MCP tools are the official plugin, unchanged.
+This repository supplies the necessary Bot-to-ACP compatibility bridge, remote
+HTTP access, and the separately requested phone protocol and in-page host updater.
+The official runtime is built/bundled, not reimplemented. See
+[UPSTREAM.md](UPSTREAM.md) for the complete implementation inventory, exact pins,
+source provenance, and remaining compatibility limits.
 
 ## Requirements
 
-- Linux (x86_64 or arm64), a VPS or home server is fine
-- Node.js 22.19 or newer
-- A MiniMax account. The Bots run through the MiniMax Code CLI, which signs in
-  with your own account; you need to run `mcode login` once.
+- Linux and a supported Node.js: 22.19+ on 22.x, 24.2+ on 24.x, 25 or 26.
+- Git and npm. The installer uses Corepack when available, otherwise npm runs
+  the exact pnpm version declared by the official repository.
+- Native addon prerequisites when prebuilt binaries are unavailable: Python,
+  make and a C++ compiler. On Debian/Ubuntu: `apt-get install python3 make g++`.
+- A MiniMax account, or a configured compatible BYOK provider. BYOK does not
+  require MiniMax account sign-in.
 
-## Quick start with Docker
+## Install from official source
 
 ```sh
 git clone https://github.com/wangdada8208/minimax-bot-linux.git
 cd minimax-bot-linux
+./scripts/install.sh
 
+# For a MiniMax account; use --region cn for a mainland China account.
+node ../minimax-code-official/dist/cli.js login --region global --no-browser
+npm start
+```
+
+The installer checks out both revisions in [upstream.lock.json](upstream.lock.json),
+runs the official CLI build, and regenerates the official runtime bundle. It
+refuses to overwrite edits in either upstream checkout. The default CLI is the
+sibling source build, not an independently installed npm version.
+
+For BYOK, use the official CLI's `provider` commands. Configure and discover models
+before starting the service. To refresh a saved provider through the official
+provider application (example provider ID):
+
+```sh
+cd ../minimax-code-official
+TSX_TSCONFIG_PATH="$PWD/tsconfig.standalone.json" node \
+  --import ./node_modules/tsx/dist/loader.mjs \
+  ../minimax-bot-linux/scripts/refresh-models.mjs custom_provider:magpie --apply
+```
+
+This calls the official discovery/save implementation, preserves saved models,
+and does not switch the default model. Restart the host after refreshing the
+configured catalog. No per-turn configuration cloning or shared-process restart
+is performed. For a Magpie-compatible catalog that explicitly publishes reasoning
+levels, add `--sync-reasoning` to translate those declared levels through the
+official candidate-save API; the adapter does not guess capabilities from names.
+
+## Docker
+
+```sh
 docker compose build
-docker compose run --rm minimax-bot mcode login --no-browser   # use --region cn for mainland China
+docker compose run --rm minimax-bot mcode login --region global --no-browser
 docker compose up -d
-docker compose logs -f        # prints the page URL with its access token
+docker compose logs -f
 ```
 
-State is in `./data`, the CLI login is in `./minimax-home`. The compose file
-binds `127.0.0.1:8787`, so put your own HTTPS reverse proxy with a login in
-front before exposing it.
-
-## Quick start without Docker
-
-```sh
-git clone https://github.com/wangdada8208/minimax-bot-linux.git
-cd minimax-bot-linux
-./scripts/install.sh          # installs deps, the mcode CLI, and the pinned plugin
-mcode login --region global --no-browser
-MINIMAX_BOT_PLUGIN="$PWD/../MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot" npm start
-```
-
-Use `--region cn` for a mainland China account. A custom OpenAI-compatible
-model catalog can be supplied with `MINIMAX_BOT_MODELS_URL` and
-`MINIMAX_BOT_MODELS_API_KEY`; the key is read from the environment and is never
-written by this repository.
-
-The process prints a URL such as `http://127.0.0.1:8787/bot?token=...`. Opening
-it sets an HttpOnly cookie and redirects to `/bot`. The token is remembered in
-`~/.minimax-bot/access-token`. Requests without it get `401`.
-
-The first message starts `mcode acp`. Until `mcode login` has been completed,
-that process has no model and the reply fails; the page itself still loads, and
-Bots, groups, and memory can be created.
+The image builds the pinned official CLI from source and bundles the same official
+runtime exports. State is in `./data`; account/provider data is in `./minimax-home`.
+Compose binds `127.0.0.1:8787`; use your HTTPS reverse proxy for remote access.
+Docker build support is provided, but a Linux source-build test is not evidence
+that Docker or every CPU architecture has been validated.
 
 ## Configuration
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MINIMAX_BOT_HOST` | `127.0.0.1` | Address the guarded page listens on |
-| `MINIMAX_BOT_PORT` | `8787` | Port the guarded page listens on |
-| `MINIMAX_BOT_DATA` | `~/.minimax-bot` | Bot state, messages, memory, avatars, uploads |
-| `MINIMAX_BOT_CWD` | current directory | Workspace every Bot session can read and modify |
-| `MINIMAX_BOT_MCODE` | `mcode` | MiniMax Code CLI executable. A path ending in `.js` is run with `MINIMAX_BOT_NODE` (defaults to the Node running the host), which avoids a `PATH` lookup inside the `#!/usr/bin/env node` shim. |
-| `MINIMAX_BOT_PLUGIN` | sibling `MiniMax-Code-MiniApps` checkout | Official plugin directory |
-| `MINIMAX_BOT_TOKEN` | read from `access-token` | Overrides the saved page token |
+| `MINIMAX_BOT_HOST` | `127.0.0.1` | Remote access listener address |
+| `MINIMAX_BOT_PORT` | `8787` | Remote access port |
+| `MINIMAX_BOT_DATA` | `~/.minimax-bot` | Official Bot state and history |
+| `MINIMAX_BOT_CWD` | current directory | Agent workspace |
+| `MINIMAX_RUNTIME_DIR` | sibling `minimax-code-official` | Official source/build root |
+| `MINIMAX_BOT_MCODE` | the source root's `dist/cli.js` | Override official CLI entry or executable |
+| `MINIMAX_BOT_NODE` | the host's Node executable | Node used for the official process and `.js` CLI |
+| `MINIMAX_BOT_PLUGIN` | sibling MiniApps Bot directory | Unchanged official plugin |
+| `MINIMAX_BOT_TOKEN` | saved `access-token` | Remote browser credential |
+| `MINIMAX_BOT_MODELS_URL` | unset | Optional provider metadata/discovery catalog |
+| `MINIMAX_BOT_MODELS_API_KEY` | unset | Catalog credential, kept in the server environment |
 
-Bind `MINIMAX_BOT_HOST` to `127.0.0.1` and reach it through an authenticated reverse proxy. Each turn can use files and a shell inside `MINIMAX_BOT_CWD`, so do not publish the port directly.
+Open the printed `/bot?token=...` URL. It sets an HttpOnly cookie and redirects to
+`/bot`. Unauthenticated private requests return 401. The CLI's own data directory
+follows official configuration (`MINIMAX_DATA_DIR`, `MAVIS_DATA_DIR`, or profile
+selection); the host does not rewrite its global MCP file.
 
-## Keep it running
+## What runs where
 
-The host is a normal long-running process. On a server, run it as a service so it restarts after a crash or reboot:
+The official process adapter materializes the runtime payload, reserves a port,
+starts the official IPC runner, checks readiness, retries port conflicts, and
+proves process termination on shutdown. A small bootstrap supplies `context.agent`
+through the runner's supported `loadModule` seam; this Agent interface is absent
+from the audited public runner context but required by the Bot.
+
+One official ACP process handles Bot sessions inside that child. Team MCP tools
+are supplied on both session creation and resume using the official ACP contract.
+The model picker and reasoning effort use the official session's advertised
+controls. ACP form elicitation is mapped to the official Bot questionnaire UI.
+Some Bot-specific questionnaire metadata is not present on the ACP wire; details
+are recorded in [UPSTREAM.md](UPSTREAM.md).
+
+The pinned Runtime manifest reader predates the Bot's `agentAccess` and
+`surface.window` fields. The compatibility bridge projects those fields out of
+an in-memory validation view and supplies the requested Agent capability; original
+manifest and payload bytes stay unchanged. This is not a complete desktop host.
+
+## Keep it running and update
+
+Use [the systemd unit](deploy/minimax-bot.service),
+[the environment example](deploy/minimax-bot.env.example), or
+`scripts/watchdog.sh --daemon`.
+
+The injected update control updates this host repository with a fast-forward,
+refuses conflicting local changes, and requests a watchdog restart. It is separate
+from accepting a new upstream source pin. Inspect upstream changes with:
 
 ```sh
-sudo cp deploy/minimax-bot.service /etc/systemd/system/
-sudo cp deploy/minimax-bot.env.example /etc/minimax-bot.env   # then edit the paths
-sudo systemctl daemon-reload
-sudo systemctl enable --now minimax-bot
+npm run update-upstream
 ```
 
-Without systemd, `scripts/watchdog.sh --daemon` restarts the host whenever it exits.
+The weekly action watches both complete upstream revisions and opens an issue.
+Review changed pins, rebuild official artifacts and validate them before deploy.
 
-## Upstream tracking
-
-This host is pinned to one upstream commit, recorded in
-[`upstream.lock.json`](upstream.lock.json) (currently MiniMax Bot **0.7.18**).
-The Docker image and the installer both check out that exact commit, so a
-deployment is reproducible.
-
-```sh
-npm run update-upstream      # move the pin to the latest upstream main
-```
-
-A weekly GitHub Action compares the pin with upstream and opens an `upstream`
-issue when a newer Bot version is released. See [UPSTREAM.md](UPSTREAM.md).
-
-## What is different from the desktop app
-
-- ACP does not return the desktop questionnaire object. A question from the model arrives as text instead of the in-page form.
-- The Bot settings model picker lists the Magpie catalog from `MINIMAX_BOT_MODELS_URL`. The selected model is applied to that Bot's ACP session before each turn. A model Magpie does not route still fails when the turn starts. Reasoning level is stored with the choice; ACP applies the model and variant, while its own session keeps the reasoning control.
-- Sessions created by the desktop app do not exist in the CLI. Copied Bot data keeps its history and memory, and the next message starts a new CLI session.
-- The plugin's own MCP server is not yet connected back to `mcode`, so a Bot cannot call tools such as `message_bot` through the CLI. Group replies are still driven by the page's own engine.
-
-## Tests
+## Validation
 
 ```sh
 npm test
+MINIMAX_BOT_PLUGIN="$PWD/../MiniMax-Code-MiniApps/plugins/minimax-ai/minimax-bot" npm test
 ```
 
-The tests use a fake ACP process. They do not call MiniMax.
-
-## Updating from the page
-
-A refresh control sits in the Bot page's side rail, next to Tasks and Settings.
-It shows the running commit, the one on disk and the remote, and offers one
-button to update.
-
-- **Checking** only runs `git fetch`; it never changes the checkout.
-- **Update** fast-forwards the checkout, reinstalls dependencies if the lockfile
-  moved, and refuses with a visible reason if anything would conflict: local
-  edits, a diverged branch, a detached HEAD, or local commits not on the remote.
-- An update lands on disk. The control then says a restart is required; the
-  watchdog restarts the host within about 30 seconds after it exits.
-
-The host injects this control when it serves the page, so the plugin's own files
-stay untouched. The policy lives in `scripts/self-update.sh`, which can also be
-run by hand.
-
-The policy lives in `scripts/self-update.sh`, which can also be run by hand:
-
-```sh
-bash scripts/self-update.sh check
-bash scripts/self-update.sh apply
-```
+Tests exercise ACP contracts, questionnaire continuation, model selection,
+concurrent-session safety, the actual official child lifecycle/failures/port
+retry, mobile translation and update refusal. Setting the plugin variable also
+boots the real Bot package and reads its data through the phone bridge. Model
+service calls and live cross-Bot dispatch require separate acceptance checks.
