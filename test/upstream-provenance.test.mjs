@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { prepareNativeCompatibilityPatchset } from '../src/runtime-compatibility.mjs';
 
 const root = new URL('../', import.meta.url);
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -26,12 +27,16 @@ test('native Runtime build preserves official source and complete worker assets'
   const lock = JSON.parse(await readFile(new URL('upstream.lock.json', root)));
   assert.equal(native.revision, lock.runtime.commit);
   assert.equal(native.generatorSha256, sha256(await readFile(new URL('scripts/build-official.mjs', root))));
+  assert.equal(native.compatibilityGenerator.sha256, sha256(await readFile(new URL(native.compatibilityGenerator.path, root))));
+  assert.equal(native.compatibilityPatches.length, 3);
   assert.ok(native.build.define['import.meta.url']);
   for (const asset of ['dist/quickjs-worker.js', 'dist/emscripten-module.wasm', 'dist/image-preview-worker.js']) {
     assert.ok(native.officialAssets.some(row => row.path === asset), asset);
   }
   try { await readFile(resolve(official, 'package.json')); }
   catch (error) { if (error.code === 'ENOENT') return t.skip('official checkout is not installed'); throw error; }
+  const { changes } = await prepareNativeCompatibilityPatchset({ officialRoot: official });
+  assert.deepEqual(native.compatibilityPatches, changes);
   assert.equal(sha256(await readFile(resolve(official, native.bundle.path))), native.bundle.sha256);
   for (const row of native.officialAssets) assert.equal(sha256(await readFile(resolve(official, row.path))), row.sha256, row.path);
   for (const row of native.inputs.filter(row => !row.path.startsWith('node_modules/'))) {

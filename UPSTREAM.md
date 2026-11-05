@@ -15,7 +15,9 @@ remote access, or the separately requested phone and update features.
 
 The installer checks out these revisions, installs the official workspace using
 its package-manager pin, and builds its CLI with the official build script.
-It also bundles the required TypeScript exports without modifying their sources.
+It also bundles the required TypeScript exports. The lifecycle bundle remains
+unchanged. The native bundle applies only the explicit browser-policy exception
+documented below; official source files and CLI artifacts remain unchanged on disk.
 The generated bundle is committed so ordinary host tests do not need a full
 workspace checkout. `src/vendor/official-miniapp.provenance.json` records every
 bundle input and SHA-256, the upstream revision, bundler version, and output hash.
@@ -122,6 +124,36 @@ existing official Worker/WASM/resource closure. Source loading alone is insuffic
 `run_code` needs the built QuickJS Worker beside the stable CLI entry. Native
 provenance records 5,842 input hashes and the official artifact closure in
 `src/vendor/official-native.provenance.json`; no worker path is patched.
+
+## Native browser-policy compatibility exception
+
+At the pinned revision, the official explicit-config Browser Use reminder tells
+the Agent to call `request_feature_enable` whenever it detects browser intent,
+even if the official Agent denylist removes that tool. This incorrectly blocks
+independent authorized Browser Harness work. Disabling the tool alone does not
+fix the contradictory trusted reminder. The previous doctor-only acceptance did
+not cover an actual webpage task and therefore missed it.
+
+There is no supported public switch for this reminder. Removing the provider does
+not suppress it; pretending to be an Electron host changes unrelated capabilities
+and does not fix normal root turns; headless mode removes real questionnaire
+capabilities. Those workarounds are not used.
+
+`src/runtime-compatibility.mjs` applies a native-build-only correction to three
+source modules. The prepared official Agent profile's
+`agent_profile.config_selection.disallowedTools` explicitly denying
+`request_feature_enable` selects accurate administrator-disabled guidance.
+Native availability, tool admission, access controls, base reminders, existing
+browser context, desktop policy, and ordinary questionnaires remain unchanged.
+Agents without that explicit denial retain the original guidance byte-for-byte.
+
+Full-file source hashes and unique replacement anchors are checked before and
+during compilation. `src/vendor/official-native.provenance.json` records the exact
+three paths, original/patched hashes, replacements and compatibility-generator
+hash. No upstream source file, CLI, worker or permission implementation is edited.
+This is an explicit compatibility exception, not an entirely unmodified native
+Runtime bundle. Tests execute both pristine and corrected official service and
+product modules, including the actual prepared-profile handoff.
 
 ## Rebuild and updates
 

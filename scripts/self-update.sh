@@ -124,7 +124,7 @@ fi
 # Rebuild native exports before restarting when their build contract changes.
 # The official source revision must already match the lock; never silently patch
 # or advance that checkout from the page updater.
-if [ -f scripts/build-official.mjs ] && git diff --name-only "$current" "$updated" | grep -qE '^(upstream\.lock\.json|scripts/build-official\.mjs|src/native-agent\.mjs|src/official-runner\.mjs)$'; then
+if [ -f scripts/build-official.mjs ] && git diff --name-only "$current" "$updated" | grep -qE '^(upstream\.lock\.json|scripts/build-official\.mjs|src/native-agent\.mjs|src/runtime-compatibility\.mjs|src/official-runner\.mjs)$'; then
   if ! npm run build:official >/dev/null 2>&1; then
     git reset --hard --quiet "$current"
     fail runtime-build-failed "Official runtime build failed; the checkout was rolled back. Run scripts/install.sh to prepare the pinned official build."

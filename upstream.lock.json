@@ -10,7 +10,7 @@
     "repository": "MiniMax-AI/minimax-code",
     "commit": "6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc",
     "version": "0.7.2",
-    "sourcePolicy": "Build official CLI and bundle official sources unchanged",
+    "sourcePolicy": "Build official CLI and lifecycle unchanged; native bundle records explicit browser-policy compatibility exceptions",
     "bundle": "src/vendor/official-miniapp.mjs",
     "provenance": "src/vendor/official-miniapp.provenance.json",
     "nativeBundle": "dist/bot-native.mjs",

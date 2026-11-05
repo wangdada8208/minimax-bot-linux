@@ -3,12 +3,65 @@
   "revision": "6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc",
   "generatedBy": "node scripts/build-official.mjs",
   "esbuildVersion": "0.28.2",
-  "generatorSha256": "ddfe3536ac8da07ec26123974e12aa10a2c2150006f72151ed30209c68bfb412",
-  "sourcePolicy": "All input sources bundled unchanged; no patches, source replacements, or lifecycle reimplementations. Official build supplies workers and runtime assets.",
+  "generatorSha256": "026b471d41d3800df4986415cd51c0cb6bf36929abbfe6a1d5013e04161bac75",
+  "sourcePolicy": "Official sources and assets are reused; only the explicit compatibilityPatches below transform native-bundle inputs. Official tracked files, CLI, workers and permission controls are unchanged.",
+  "compatibilityPatches": [
+    {
+      "path": "packages/local-runtime-v2/src/service/browser-use/contracts.ts",
+      "revision": "6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc",
+      "reason": "Respect an Agent denial of request_feature_enable in native Browser Use reminders without changing availability, tool admission, or safety policy.",
+      "originalSha256": "bc944130f3f9b4340bf5b981d6d8f434497f02836c39cd42b3b7bf9de19b69e0",
+      "patchedSha256": "44b2e4c523b2d5ceafec16b61f4089959a7ffc209735e82f71af6b1359521ce2",
+      "replacements": [
+        {
+          "before": "export interface BrowserUseTurnReminderInput {\n  readonly sessionId: string;",
+          "after": "export interface BrowserUseTurnReminderInput {\n  readonly featureEnableDenied?: boolean;\n  readonly sessionId: string;"
+        }
+      ]
+    },
+    {
+      "path": "packages/local-runtime-v2/src/application/agent/runtime-agent-product.ts",
+      "revision": "6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc",
+      "reason": "Respect an Agent denial of request_feature_enable in native Browser Use reminders without changing availability, tool admission, or safety policy.",
+      "originalSha256": "2910e502f18487eebacc7270fc8e2010c95441c0fb73c50cd0a0aa855e1a7fb3",
+      "patchedSha256": "a9d81f7c682d66670d36d1044c8d00864476f3a5fab9727f17233f7cf9756c41",
+      "replacements": [
+        {
+          "before": "            userPrompt: input.promptText,\n            ...allowedExtensionSkillNames(input.agentConfig),",
+          "after": "            userPrompt: input.promptText,\n            featureEnableDenied: browserFeatureEnableDenied(input.agentConfig),\n            ...allowedExtensionSkillNames(input.agentConfig),"
+        },
+        {
+          "before": "function allowedExtensionSkillNames(agentConfig: Readonly<Record<string, unknown>>): {",
+          "after": "function browserFeatureEnableDenied(agentConfig: Readonly<Record<string, unknown>>): boolean {\n  const profile = isRecord(agentConfig.agent_profile) ? agentConfig.agent_profile : undefined;\n  const selection = isRecord(profile?.config_selection) ? profile.config_selection : undefined;\n  const value = selection?.disallowedTools;\n  return Array.isArray(value) && value.every((entry) => typeof entry === 'string')\n    ? value.some((entry) => entry.trim() === 'request_feature_enable')\n    : false;\n}\n\nfunction allowedExtensionSkillNames(agentConfig: Readonly<Record<string, unknown>>): {"
+        }
+      ]
+    },
+    {
+      "path": "packages/local-runtime-v2/src/service/browser-use/browser-use.service.ts",
+      "revision": "6e062ae8ca365db34b93a7cdc96ffda3a8b9fffc",
+      "reason": "Respect an Agent denial of request_feature_enable in native Browser Use reminders without changing availability, tool admission, or safety policy.",
+      "originalSha256": "5e9176941c55980cf79c1be188b82a22a06ac42687f27c02242eb54c3d771142",
+      "patchedSha256": "5fb1934561d38124b9bdb6ffcc928244a914c4328762c6e9f3eeca9061ad1023",
+      "replacements": [
+        {
+          "before": "const DESKTOP_PLUGIN_DISABLED_GUIDANCE =",
+          "after": "const ADMINISTRATOR_DISABLED_BROWSER_GUIDANCE = [\n  'Built-in Browser Use is disabled by the administrator for this Agent. Do not request or enable it.',\n  'This restriction applies to the native Browser Use capability. Independently authorized tools retain their own policy.',\n  'Do not bypass credentials or access controls.',\n].join('\\n');\n\nconst DESKTOP_PLUGIN_DISABLED_GUIDANCE ="
+        },
+        {
+          "before": "    const disabledGuidance = resolveDisabledGuidance(\n      this.options.activationMode,\n      browserDisabledGuidanceInjected,\n    );",
+          "after": "    const disabledGuidance =\n      this.options.activationMode === 'explicit-config' &&\n      browserDisabledGuidanceInjected &&\n      input.featureEnableDenied === true\n        ? ADMINISTRATOR_DISABLED_BROWSER_GUIDANCE\n        : resolveDisabledGuidance(\n            this.options.activationMode,\n            browserDisabledGuidanceInjected,\n          );"
+        }
+      ]
+    }
+  ],
+  "compatibilityGenerator": {
+    "path": "src/runtime-compatibility.mjs",
+    "sha256": "b8aca6d1fa0a5a86c9ab3c2e22e41a2819b62adfdd22b3dd64b52cf884632ce1"
+  },
   "bundle": {
     "path": "dist/bot-native.mjs",
     "relativeTo": "runtimeDir",
-    "sha256": "b40ae51ce9d0bad8b48e5bfcf93a541278c0628b600f7a0fb4a23e9c29c454b7"
+    "sha256": "95a2804bd37ff0975a2f335b75f8983eafee7a90f5e54a22716559d7f8604f88"
   },
   "build": {
     "bundle": true,
@@ -109861,7 +109914,7 @@
     },
     {
       "path": "packages/local-runtime-v2/src/application/agent/runtime-agent-product.ts",
-      "bytes": 11858,
+      "bytes": 12438,
       "imports": [
         {
           "path": "packages/local-runtime-v2/src/application/agent/execution-source.ts",
@@ -114850,7 +114903,7 @@
     },
     {
       "path": "packages/local-runtime-v2/src/service/browser-use/browser-use.service.ts",
-      "bytes": 17663,
+      "bytes": 18226,
       "imports": [
         {
           "path": "packages/agent-tools/src/desktop/index.ts",
@@ -114893,7 +114946,7 @@
     },
     {
       "path": "packages/local-runtime-v2/src/service/browser-use/contracts.ts",
-      "bytes": 5706,
+      "bytes": 5748,
       "imports": [],
       "format": "esm",
       "sha256": "bc944130f3f9b4340bf5b981d6d8f434497f02836c39cd42b3b7bf9de19b69e0"
@@ -176070,7 +176123,7 @@
           "bytesInOutput": 2349
         },
         "packages/local-runtime-v2/src/service/browser-use/browser-use.service.ts": {
-          "bytesInOutput": 7517
+          "bytesInOutput": 7893
         },
         "packages/local-runtime-v2/src/service/browser-use/initialize.ts": {
           "bytesInOutput": 34
@@ -176295,7 +176348,7 @@
           "bytesInOutput": 234
         },
         "packages/local-runtime-v2/src/application/agent/runtime-agent-product.ts": {
-          "bytesInOutput": 4346
+          "bytesInOutput": 4649
         },
         "packages/local-runtime-v2/src/application/session/session-tool-call-mode-policy.ts": {
           "bytesInOutput": 102
@@ -177021,7 +177074,7 @@
           "bytesInOutput": 500
         }
       },
-      "bytes": 16877565
+      "bytes": 16878244
     }
   }
 }

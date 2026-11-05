@@ -1,10 +1,12 @@
-// Bundle the pinned official sources without patching or substituting their implementation.
+// Bundle pinned official sources. Native-only compatibility exceptions are
+// explicit, source-hash checked and recorded separately in native provenance.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createNativeCompatibilityPlugin } from '../src/runtime-compatibility.mjs';
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 const officialRoot = path.resolve(process.env.MINIMAX_RUNTIME_DIR ?? process.env.MINIMAX_CODE_OFFICIAL_ROOT ?? path.join(projectRoot, '../minimax-code-official'));
@@ -120,8 +122,10 @@ const nativeFlags = {
     __TUI_BUILD_VARIANT__: '"standard"', __TUI_NPM_DIST_TAG__: '"latest"',
   },
 };
+const compatibility = await createNativeCompatibilityPlugin({ officialRoot });
 const nativeResult = await build({
   ...nativeFlags,
+  plugins: [compatibility.plugin],
   stdin: { contents: nativeEntry, resolveDir: officialRoot, sourcefile: 'official-native-entry.mjs' },
   absWorkingDir: officialRoot, outfile: nativeOutfile,
   alias: aliases, metafile: true,
@@ -158,10 +162,12 @@ await writeFile(path.join(outputDir, 'official-native.provenance.json'), JSON.st
   repository: 'https://github.com/MiniMax-AI/minimax-code', revision,
   generatedBy: 'node scripts/build-official.mjs', esbuildVersion,
   generatorSha256: sha256(await readFile(fileURLToPath(import.meta.url))),
-  sourcePolicy: 'All input sources bundled unchanged; no patches, source replacements, or lifecycle reimplementations. Official build supplies workers and runtime assets.',
+  sourcePolicy: 'Official sources and assets are reused; only the explicit compatibilityPatches below transform native-bundle inputs. Official tracked files, CLI, workers and permission controls are unchanged.',
+  compatibilityPatches: compatibility.changes,
+  compatibilityGenerator: { path: 'src/runtime-compatibility.mjs', sha256: sha256(await readFile(path.join(projectRoot, 'src/runtime-compatibility.mjs'))) },
   bundle: { path: path.relative(officialRoot, nativeOutfile).split(path.sep).join('/'), relativeTo: 'runtimeDir', sha256: sha256(await readFile(nativeOutfile)) },
   build: { ...nativeFlags, alias: aliases, banner: moduleLocation.banner, entry: nativeEntry },
   buildSources, inputs: nativeInputs, officialAssets,
   outputs: nativeResult.metafile.outputs,
 }, null, 2) + '\n');
-console.log(`Bundled ${nativeInputs.length} unchanged native Runtime inputs into ${nativeOutfile}`);
+console.log(`Bundled ${nativeInputs.length} native Runtime inputs with ${compatibility.changes.length} audited compatibility exceptions into ${nativeOutfile}`);

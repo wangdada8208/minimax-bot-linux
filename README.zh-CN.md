@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-在 Linux 服务器运行官方 MiniMax Bot，并从另一台电脑打开页面。页面、引擎、团队工具、群聊、记忆和定时任务直接使用未修改的 [MiniMax-Code-MiniApps 官方插件](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot)；CLI 和插件进程生命周期直接使用 [minimax-code 官方源码](https://github.com/MiniMax-AI/minimax-code)。两个官方仓库的源文件都不修改。
+在 Linux 服务器运行官方 MiniMax Bot，并从另一台电脑打开页面。页面、引擎、团队工具、群聊、记忆和定时任务直接使用未修改的 [MiniMax-Code-MiniApps 官方插件](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot)；CLI 和插件进程生命周期直接使用 [minimax-code 官方源码](https://github.com/MiniMax-AI/minimax-code)。两个官方仓库的源文件都不修改；原生打包时有一项明确记录的兼容修复，涉及三个模块：管理员禁用可选 Browser Use 启用工具后，不再注入要求调用该工具的矛盾指令。它只修正引导文字与禁用策略的衔接，不改变浏览器可用性、权限检查或正常问卷。原始与修复后的源码哈希及精确改动都写入构建记录。
 
 本仓库只保留 Bot 与官方原生 Runtime 之间必要的接口适配、远程 HTTP 访问，以及另行要求的手机协议和页面内宿主更新功能。官方 Runtime 直接构建、打包和调用，不再重写其实现。完整复用清单、锁定版本、源码哈希和兼容边界见 [UPSTREAM.md](UPSTREAM.md)。
 

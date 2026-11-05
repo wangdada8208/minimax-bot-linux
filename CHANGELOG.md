@@ -2,8 +2,14 @@
 
 ## Unreleased
 
-- Replace the default ACP Agent bridge with unmodified official native Runtime
-  exports, using the official CLI build profile and Worker/WASM/resource closure.
+- Correct a browser-policy conflict with a native-build-only compatibility fix:
+  explicit administrator denial of feature enablement now produces accurate
+  disabled guidance instead of instructing the Agent to call the denied tool.
+  Three module transformations are source-hash checked and recorded in provenance;
+  official checkout files, native admission, permissions and questionnaires stay intact.
+- Replace the default ACP Agent bridge with official native Runtime exports,
+  using the official CLI build profile and Worker/WASM/resource closure, with the
+  explicit browser-policy compatibility exception described above.
 - Preserve native questionnaire identity, mode, payload and expiry; recover answers
   after a full host restart and observe the exact official continuation turn.
 - Use the official Custom Agent denylist for optional feature enablement while

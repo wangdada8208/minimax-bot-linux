@@ -7,7 +7,11 @@ computer. The Bot UI, engine, team tools, groups, memory and schedules come from
 [MiniMax-AI/MiniMax-Code-MiniApps](https://github.com/MiniMax-AI/MiniMax-Code-MiniApps/tree/main/plugins/minimax-ai/minimax-bot), unchanged.
 The CLI and process lifecycle come directly from
 [MiniMax-AI/minimax-code](https://github.com/MiniMax-AI/minimax-code).
-Both upstream source trees remain unmodified.
+Both upstream source trees remain unmodified on disk. The native bundle has one
+explicit compatibility fix across three source modules: an Agent that denies
+optional Browser Use enablement receives accurate disabled guidance instead of an
+instruction to call the denied tool. This exception is hash-checked and recorded
+in provenance; browser admission and authorization checks remain intact.
 
 This repository supplies the necessary Bot-to-native-Runtime compatibility bridge, remote
 HTTP access, and the separately requested phone protocol and in-page host updater.

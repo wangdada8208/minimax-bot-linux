@@ -2,6 +2,8 @@
 
 Validated on the deployed Linux host on 2026-11-05 (Asia/Taipei). Official MiniApps
 and Runtime pins remain unchanged; neither official source tree was edited.
+The native bundle now has the explicit three-module browser-policy compatibility
+correction described below; it is not an entirely unmodified bundle.
 
 ## Original failure
 
@@ -64,6 +66,33 @@ original ID and resumed the model response after an answer.
   permissions, legacy migration/identity, phone notifications and official process
   lifecycle/readiness/port retry.
 - The source checkouts retain their pinned commits and clean tracked files.
+
+## Browser-policy correction after the screenshot report
+
+The earlier doctor-only check did not exercise a page operation. A subsequent real
+proxy lookup stopped without tools because the official Runtime still injected a
+trusted instruction to call the explicitly denied feature-enable tool. Removing
+that tool alone did not fix the conflicting instruction.
+
+The native-build-only correction now reads the actual prepared Agent profile's
+explicit deny selector and changes only that contradictory guidance. Tests execute
+the actual original and corrected Browser Use service and Agent product modules;
+legacy behavior for other Agents, native availability, base reminders, desktop
+policy, takeover guards and questionnaires remains unchanged. The final full suite
+passed **96 tests, 0 failed, 0 skipped**.
+
+Live task `task_62a2853b58f4` delegated an actual page read to the subscription Bot.
+It used Browser Harness to create a separate tab, visit `https://example.com/`,
+read the title and first paragraph, and close only its own tab. The initial cleanup
+command lacked the new tab ID; the Bot recovered by comparing the original tab
+list and verified all 9 original tabs remained. It did not request Browser Use
+enablement. Official relay `msg_result_batch_e3a213f00522` returned the nonempty
+result and woke Chief to summarize it.
+
+The screenshot's original read-only lookup has also been handed back to Chief for
+reassignment, with no server/global-proxy configuration changes authorized by this
+recovery step. Actual website login/MFA is distinct from the repaired Runtime bug;
+no successful proxy lookup is claimed by the public-page test.
 
 ## Boundaries
 
