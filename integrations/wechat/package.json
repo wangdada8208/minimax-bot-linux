@@ -1,0 +1,1 @@
+{"name":"minimax-wechat-official-runtime","private":true,"type":"module","dependencies":{"@tencent-weixin/openclaw-weixin":"2.4.10","openclaw":"2026.11.3","qrcode":"1.5.4"}}

@@ -71,6 +71,10 @@ const pluginPort = lifecycle.port;
 // options.port is the bridge's upstream, not its own listener. The bridge
 // allocates its listener separately; it must forward to the actual plugin.
 const mobile = await startMobileBridge({ host: '127.0.0.1', port: pluginPort, token });
+const wechat = process.env.MINIMAX_BOT_WECHAT_RUNTIME
+  ? await (await import('./wechat-bridge.mjs')).startWechatBridge({ host: '127.0.0.1', botPort: pluginPort, token,
+      dataDir: options.dataDir, botWebUrl: process.env.MINIMAX_BOT_PUBLIC_URL, officialPackageRoot: join(process.env.MINIMAX_BOT_WECHAT_RUNTIME, 'node_modules/@tencent-weixin/openclaw-weixin') })
+  : undefined;
 const selfUpdate = new SelfUpdate({
   root,
   logger: { warn: (message) => console.error(`[bot] warn ${message}`) },
@@ -136,13 +140,27 @@ const guard = createServer((request, response) => {
     return;
   }
   const mobilePath = url.pathname.startsWith('/api/mobile/');
+  const wechatPath = url.pathname === '/wechat' || url.pathname.startsWith('/wechat/');
+  if (url.pathname === '/wechat') {
+    response.writeHead(302, { location: `/wechat/${url.search}`, 'cache-control': 'no-store' });
+    response.end();
+    return;
+  }
+  if (wechatPath && !wechat) {
+    response.writeHead(503, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    response.end('WeChat is not configured on this host.');
+    return;
+  }
+  const targetPort = wechatPath ? wechat.port : mobilePath ? mobile.port : pluginPort;
+  const targetPath = wechatPath ? (url.pathname.slice('/wechat'.length) || '/') + url.search : request.url;
   const upstream = httpRequest(
     {
       host: '127.0.0.1',
-      port: mobilePath ? mobile.port : pluginPort,
+      port: targetPort,
       method: request.method,
-      path: request.url,
-      headers: { ...request.headers, host: `127.0.0.1:${mobilePath ? mobile.port : pluginPort}` },
+      path: targetPath,
+      headers: { ...request.headers, host: `127.0.0.1:${targetPort}`,
+        ...(wechatPath ? { authorization: `Bearer ${token}` } : {}) },
       agent: mobilePath ? mobileAgent : appAgent,
     },
     (reply) => {
@@ -244,6 +262,7 @@ const stop = async () => {
   if (stopping) return;
   stopping = true;
   mobile.close();
+  await wechat?.close();
   appAgent.destroy();
   mobileAgent.destroy();
   try {
